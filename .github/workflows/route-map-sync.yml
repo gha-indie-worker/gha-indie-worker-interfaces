@@ -1,0 +1,57 @@
+name: route-map-sync
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema
+      - run: python3 scripts/check-route-sync.py
+      - run: python3 scripts/generate-routes.py --map route-maps/api.route-map.json --out generated/routes --check
+
+  compile-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --manifest-path generated/routes/rust/Cargo.toml
+
+  compile-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes -p typescript@5.8.3 tsc --noEmit -p generated/routes/typescript
+
+  compile-dart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: "3.6.0"
+      - run: dart pub get
+        working-directory: generated/routes/dart
+      - run: dart analyze --fatal-infos
+        working-directory: generated/routes/dart
+
+  compile-gleam:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          gleam-version: "1.11.1"
+      - run: gleam build
+        working-directory: generated/routes/gleam

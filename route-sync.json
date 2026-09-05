@@ -1,0 +1,5 @@
+{
+  "maps": ["route-maps/api.route-map.json"],
+  "schema": "scripts/vendor/route-map.schema.json",
+  "skip_source": true
+}

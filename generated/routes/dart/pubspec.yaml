@@ -1,0 +1,4 @@
+name: gha_indie_worker_routes
+publish_to: none
+environment:
+  sdk: ">=3.3.0 <4.0.0"
