@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/schema/v1/wasm-release-profile.json",
+  "title": "GHA Indie Worker WASM release profile",
+  "description": "Organization profile layered on top of the OWLS release-v1 contract (https://ores-wasm-loaders.github.io/schemas/release-v1.json). release-v1 REMAINS THE BASE AUTHORITY. This profile only NARROWS it: it recognizes a closed set of appId values, restricts asset origins to surfaces this organization actually controls, and requires an extensions.ghaIndieWorker block naming the owning repository and the deploy surface. This profile never widens release-v1, never relaxes one of its constraints, and never redefines a field's meaning. A document that fails release-v1 is invalid no matter what this profile says. Validate against release-v1 FIRST, then against this profile; see schema/v1/README.md for the exact order.",
+  "$comment": "Constraints that merely restate release-v1 are included so that this schema is self-contained and needs no network $ref resolution. Where a constraint is a restatement it is marked in its description. Where it is a genuine narrowing it is marked NARROWS.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "appId",
+    "release",
+    "runtime",
+    "entrypoint",
+    "assets",
+    "extensions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "Restates release-v1.",
+      "const": 1
+    },
+    "appId": {
+      "description": "NARROWS release-v1's ^[a-z0-9][a-z0-9-]{0,63}$ pattern to the closed set of applications this organization recognizes. Adding an application to the organization means adding it here in a reviewed change.",
+      "enum": [
+        "user-app",
+        "org-app",
+        "auth-app",
+        "owls-pilot"
+      ]
+    },
+    "release": {
+      "description": "Restates release-v1. Release identifiers are immutable and must never be reused for different asset content.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "runtime": {
+      "description": "NARROWS release-v1, which also allows \"flutter-web\". This organization has no Flutter web build: gha-indie-worker-flutter has no web/ directory on any branch. Re-add \"flutter-web\" here only when such a build actually exists and is published.",
+      "enum": [
+        "raw-wasm",
+        "wasm-bindgen"
+      ]
+    },
+    "entrypoint": {
+      "description": "Restates release-v1. Must name a declared asset whose kind matches the runtime; release-v1 is the authority on that cross-field rule.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "assets": {
+      "description": "Restates release-v1's array bounds; each item additionally narrows the allowed URL origin.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "extensions": {
+      "description": "NARROWS release-v1, where extensions is an unconstrained optional object. This profile makes it REQUIRED and requires a ghaIndieWorker block inside it.",
+      "type": "object",
+      "required": [
+        "ghaIndieWorker"
+      ],
+      "properties": {
+        "ghaIndieWorker": {
+          "$ref": "#/$defs/ghaIndieWorker"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "NARROWS: asset origins are tied to the declared deploy surface. Production surfaces may only name production application origins; the pilot harness may only name the test organization's own Pages origin. This is what stops a test manifest from pointing at production bytes, and a production manifest from pointing at test bytes.",
+      "if": {
+        "properties": {
+          "extensions": {
+            "properties": {
+              "ghaIndieWorker": {
+                "properties": {
+                  "deploySurface": {
+                    "const": "test-harness"
+                  }
+                },
+                "required": [
+                  "deploySurface"
+                ]
+              }
+            },
+            "required": [
+              "ghaIndieWorker"
+            ]
+          }
+        },
+        "required": [
+          "extensions"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assets": {
+            "items": {
+              "properties": {
+                "url": {
+                  "pattern": "^https://gha-indie-worker-test\\.github\\.io/[^\\s?#]*$"
+                }
+              }
+            }
+          },
+          "extensions": {
+            "properties": {
+              "ghaIndieWorker": {
+                "properties": {
+                  "repository": {
+                    "pattern": "^gha-indie-worker-test/[A-Za-z0-9._-]{1,100}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "assets": {
+            "items": {
+              "properties": {
+                "url": {
+                  "pattern": "^https://(user|org|auth|app)\\.gha-indie-worker\\.github\\.io/[^\\s?#]*$"
+                }
+              }
+            }
+          },
+          "extensions": {
+            "properties": {
+              "ghaIndieWorker": {
+                "properties": {
+                  "repository": {
+                    "pattern": "^gha-indie-worker/[A-Za-z0-9._-]{1,100}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "url",
+        "kind",
+        "bytes",
+        "sha256",
+        "prepare"
+      ],
+      "properties": {
+        "id": {
+          "description": "Restates release-v1.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "url": {
+          "description": "NARROWS release-v1's ^https://[^\\s]+$ by additionally forbidding a query string or fragment, so that an asset URL is content-addressed and cacheable as written. The origin itself is constrained by the deploy-surface rule in allOf.",
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^https://[^\\s?#]+$"
+        },
+        "kind": {
+          "description": "Restates release-v1.",
+          "enum": [
+            "wasm",
+            "module",
+            "script",
+            "data",
+            "font"
+          ]
+        },
+        "bytes": {
+          "description": "NARROWS release-v1's maximum of 268435456 to 67108864 (64 MiB), matching the maxAssetBytes ceiling in owls-web-loader's browserPolicy(). An asset larger than the loader will ever fetch should not be publishable as a release asset here.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        },
+        "sha256": {
+          "description": "Restates release-v1. Lowercase hex, exactly 64 characters.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "prepare": {
+          "description": "Restates release-v1. Marks an asset eligible for speculative preparation. Eligibility is not permission: the consuming host's policy budget still applies.",
+          "type": "boolean"
+        }
+      }
+    },
+    "ghaIndieWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "deploySurface"
+      ],
+      "properties": {
+        "repository": {
+          "description": "The repository that owns this release, as owner/name. Its owner is constrained by the deploy-surface rule in allOf, so a production surface cannot be owned by the test organization or the reverse.",
+          "type": "string",
+          "pattern": "^gha-indie-worker(-test)?/[A-Za-z0-9._-]{1,100}$"
+        },
+        "deploySurface": {
+          "description": "Where this release is served from. \"test-harness\" is the isolated pilot lane in the gha-indie-worker-test organization; the others are production application surfaces. NOTE, as of this schema's authorship: none of the production surfaces exist yet. Naming one here does not create it.",
+          "enum": [
+            "user-app",
+            "org-app",
+            "auth-app",
+            "test-harness"
+          ]
+        },
+        "notes": {
+          "description": "Free text for humans. Never interpreted by any validator or loader.",
+          "type": "string",
+          "maxLength": 2048
+        }
+      }
+    }
+  }
+}
