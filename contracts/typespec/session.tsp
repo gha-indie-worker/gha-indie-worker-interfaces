@@ -24,10 +24,10 @@
 
 namespace GhaIndieWorker.Session;
 
-@doc("Wire protocol version. Bumped only for an incompatible change; Hello negotiates it.")
+// Wire protocol version. Bumped only for an incompatible change; Hello negotiates it.
 const PROTOCOL_VERSION = 1;
 
-@doc("Largest frame encoded or accepted on either transport. An unbounded length prefix is a trivial memory exhaustion.")
+// Largest frame encoded or accepted on either transport. An unbounded length prefix is a trivial memory exhaustion.
 const MAX_FRAME_BYTES = 1048576;
 
 @doc("Client's opening frame. `resume` carries a session id from a previous connection.")
