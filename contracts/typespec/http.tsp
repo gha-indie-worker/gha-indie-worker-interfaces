@@ -178,7 +178,11 @@ model ListQuery {
 
 @route("/v1")
 @tag("identity")
-interface Session {
+// Named `Identity`, not `Session`: session.tsp declares `namespace GhaIndieWorker.Session`
+// for the live-frame vocabulary, and two symbols with that name in the same parent namespace is a
+// duplicate-symbol error. The namespace is the one that carries meaning into the JSON Schema peer,
+// so the interface is what moves.
+interface Identity {
   @doc("The caller as this service resolved them. The only operation that is not tenant-scoped by path, because its answer is what tells you which tenants you may name.")
   @get
   @route("/whoami")

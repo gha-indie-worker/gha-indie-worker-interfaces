@@ -268,9 +268,13 @@ function parseTypeSpecShape(files) {
       for (const [stmt, at] of splitTop(b.body, strings, b.bodyOffset, ';')) {
         const { prefix, rest } = splitDecorators(stmt, strings, at);
         if (!rest || rest.startsWith('...')) continue; // spread of an HTTP query bag
-        const fm = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*:\s*([\s\S]+)$/);
+        // A property name may be quoted, which is how a field keeps a wire name that collides
+        // with a TypeSpec keyword (`model`). Reading only the bare form would push the contract
+        // to rename a field to suit the tool -- backwards, and the JSON Schema peer cannot follow.
+        const fm = rest.match(/^(?:"((?:[^"\\]|\\.)*)"|([A-Za-z_][A-Za-z0-9_]*))(\?)?\s*:\s*([\s\S]+)$/);
         if (!fm) { unparsed.push(`${file}: model ${b.name} field \`${rest.replace(/\s+/g, ' ').slice(0, 70)}\``); continue; }
-        const [, fname, optional, rawType] = fm;
+        const [, quotedName, bareName, optional, rawType] = fm;
+        const fname = quotedName !== undefined ? quotedName.replace(/\\(.)/g, '$1') : bareName;
         const decos = decoratorsOf(prefix);
         const field = { optional: !!optional, array: false, type: null, format: null, enum: null, const: null };
         let t = rawType.trim();
