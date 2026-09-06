@@ -10,6 +10,7 @@
 // a handler that forgets the tenant cannot compile against these routes.
 // ============================================================================
 import "@typespec/http";
+import "./scalars.tsp";
 
 using Http;
 

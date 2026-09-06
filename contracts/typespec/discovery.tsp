@@ -11,6 +11,7 @@
 //      you cannot turn a space on without saying what you measured.
 // ============================================================================
 import "@typespec/http";
+import "./scalars.tsp";
 
 using Http;
 

@@ -23,6 +23,7 @@ import "./ores.tsp";
 import "./session.tsp";
 import "./http.tsp";
 import "./discovery.tsp";
+import "./scalars.tsp";
 using Ores;
 
 namespace GhaIndieWorker;
