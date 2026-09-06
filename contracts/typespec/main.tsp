@@ -491,7 +491,10 @@ model ComparisonSpace {
   @doc("Axis 3. Model identifier, exactly as the provider names it.")
   @minLength(1)
   @maxLength(200)
-  model: string;
+  // Quoted: `model` is a TypeSpec keyword, so the bare form starts parsing as a nested model
+  // declaration. The wire name must stay `model` -- the JSON Schema peer and lib-core's
+  // `analysis::embedding::ComparisonSpace` both use it.
+  "model": string;
 
   @doc("Axis 4. A silently re-trained model is a different space.")
   @minLength(1)
