@@ -109,7 +109,6 @@ model EventFrame {
   sequence: safeint;
 
   @doc("Opaque payload, base64 in the JSON encoding.")
-  @format("byte")
   payload: bytes;
 }
 
@@ -129,7 +128,6 @@ model CommandFrame {
   kind: "command";
   @minValue(0) @maxValue(9007199254740991) id: safeint;
   @minLength(1) @maxLength(64) @pattern("^[a-z][a-z0-9_.]*$") verb: string;
-  @format("byte")
   payload: bytes;
 }
 
@@ -137,7 +135,6 @@ model CommandFrame {
 model AckFrame {
   kind: "ack";
   @minValue(0) @maxValue(9007199254740991) id: safeint;
-  @format("byte")
   payload: bytes;
 }
 
