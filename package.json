@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Toolchain for the two contract authorities. Not published: generated/typescript is the published package. This manifest exists so `npm ci` pins the compiler and linters CI runs.",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "parity": "node scripts/parity.mjs",
     "lint:schema": "node scripts/lint-schemas.mjs",
@@ -14,7 +16,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.1.2",
-    "@oresoftware/ores-contracts": "^0.1.0",
+    "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts",
     "@typespec/compiler": "^1.0.0",
     "@typespec/http": "^1.0.0",
     "@typespec/json-schema": "^1.0.0",
