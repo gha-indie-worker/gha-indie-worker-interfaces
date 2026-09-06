@@ -308,7 +308,7 @@ fn onboarding_transition_tables_match_the_json_schema_authority() {
     let wire = |state: &Value| state.as_str().unwrap().to_string();
 
     for state in onboarding::OrgOnboardingState::ALL {
-        let key = serde_json::to_value(&state).unwrap();
+        let key = serde_json::to_value(state).unwrap();
         let listed: Vec<String> = declared["org"][wire(&key)]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no org edges for {state:?}"))
@@ -327,7 +327,7 @@ fn onboarding_transition_tables_match_the_json_schema_authority() {
     }
 
     for state in onboarding::UserOnboardingState::ALL {
-        let key = serde_json::to_value(&state).unwrap();
+        let key = serde_json::to_value(state).unwrap();
         let listed: Vec<String> = declared["user"][wire(&key)]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no user edges for {state:?}"))
@@ -351,7 +351,7 @@ fn run_status_transition_table_matches_the_json_schema_authority() {
     let doc: Value = serde_json::from_str(schemas::RUNS).unwrap();
     let declared = &doc["x-ores-transitions"]["runStatus"];
     for status in runs::RunStatus::ALL {
-        let key = serde_json::to_value(&status).unwrap();
+        let key = serde_json::to_value(status).unwrap();
         let listed: Vec<String> = declared[key.as_str().unwrap()]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no edges for {status:?}"))

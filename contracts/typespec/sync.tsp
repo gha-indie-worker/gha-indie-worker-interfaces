@@ -30,7 +30,7 @@ model CausalEnvelope {
   @minLength(1)
   @maxLength(128) entityId: string;
 
-  op: SyncOp;
+  `op`: SyncOp;
   vectorClock: json;
   payload: json;
   conflictPolicy: ConflictPolicy;

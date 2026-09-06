@@ -70,6 +70,7 @@ function deref(schema, root, where, errors) {
     if (!m) { errors.push(`${where}: unsupported $ref ${schema.$ref}`); return null; }
     const target = (root.$defs ?? {})[m[1]];
     if (!target) { errors.push(`${where}: $ref points at missing $defs/${m[1]}`); return null; }
+    // eslint-disable-next-line no-unused-vars -- destructured only to drop $ref from the spread
     const { $ref, ...rest } = schema;
     schema = Object.keys(rest).length ? { ...target, ...rest } : target;
   }
