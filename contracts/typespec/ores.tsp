@@ -2,6 +2,10 @@ import "./ores-decorators.js";
 
 namespace Ores;
 
+// `Model` and `ModelProperty` below are reflection types; without this the extern
+// declarations do not resolve and every @Ores.* use reports decorator-wrong-target.
+using TypeSpec.Reflection;
+
 /** Table name for the model. */
 extern dec table(target: Model, name: valueof string);
 /** Comma-separated field names forming a UNIQUE constraint. Repeatable. */
