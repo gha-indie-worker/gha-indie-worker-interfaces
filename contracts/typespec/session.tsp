@@ -20,6 +20,9 @@
 // bounded at 2^53-1 (IEEE-754 exact integers) in BOTH authorities. The TCP
 // binary encoding carries the full u64; a peer that would exceed the JSON
 // bound must close with `protocol` rather than round-trip a wrong number.
+// The scalar is `safeint`, not int64: these fields are bounded to 2^53-1 above, and that is what
+// safeint means. Declaring int64 would make the JSON Schema emitter render them as *strings* --
+// correct for a real 64-bit value, and wrong for one this contract has already bounded.
 // ============================================================================
 
 namespace GhaIndieWorker.Session;
@@ -57,13 +60,13 @@ model WelcomeFrame {
 @doc("Liveness probe. The peer must answer with Pong carrying the same nonce.")
 model PingFrame {
   kind: "ping";
-  @minValue(0) @maxValue(9007199254740991) nonce: int64;
+  @minValue(0) @maxValue(9007199254740991) nonce: safeint;
 }
 
 @doc("Answer to Ping. A Pong with an unexpected nonce is a protocol error.")
 model PongFrame {
   kind: "pong";
-  @minValue(0) @maxValue(9007199254740991) nonce: int64;
+  @minValue(0) @maxValue(9007199254740991) nonce: safeint;
 }
 
 @doc("Subscribe to a stream from a sequence, granting an initial credit.")
@@ -74,7 +77,7 @@ model SubscribeFrame {
   @doc("First sequence wanted. 0 means from the beginning of what is retained.")
   @minValue(0)
   @maxValue(9007199254740991)
-  from: int64;
+  from: safeint;
 
   @doc("Events the server may send before it must wait for more credit.")
   @minValue(0)
@@ -103,9 +106,10 @@ model EventFrame {
   @doc("Monotonic per stream. A client resumes by naming the next sequence it wants.")
   @minValue(0)
   @maxValue(9007199254740991)
-  sequence: int64;
+  sequence: safeint;
 
   @doc("Opaque payload, base64 in the JSON encoding.")
+  @format("byte")
   payload: bytes;
 }
 
@@ -117,21 +121,23 @@ model LaggedFrame {
   @doc("The sequence delivery jumped to. Everything between the last Event and this is gone.")
   @minValue(0)
   @maxValue(9007199254740991)
-  skippedTo: int64;
+  skippedTo: safeint;
 }
 
 @doc("A request from the client. Answered by exactly one Ack or Error with the same id.")
 model CommandFrame {
   kind: "command";
-  @minValue(0) @maxValue(9007199254740991) id: int64;
+  @minValue(0) @maxValue(9007199254740991) id: safeint;
   @minLength(1) @maxLength(64) @pattern("^[a-z][a-z0-9_.]*$") verb: string;
+  @format("byte")
   payload: bytes;
 }
 
 @doc("Successful answer to a Command.")
 model AckFrame {
   kind: "ack";
-  @minValue(0) @maxValue(9007199254740991) id: int64;
+  @minValue(0) @maxValue(9007199254740991) id: safeint;
+  @format("byte")
   payload: bytes;
 }
 
@@ -142,7 +148,7 @@ model ErrorFrame {
   @doc("The Command this answers. Absent for a connection-level error.")
   @minValue(0)
   @maxValue(9007199254740991)
-  id?: int64;
+  id?: safeint;
 
   code: GhaIndieWorker.ErrorCode;
   @minLength(1) @maxLength(1024) message: string;

@@ -216,6 +216,8 @@ const TSP_JSON_TYPE = {
   utcDateTime: ['string', 'date-time'],
   plainDate: ['string', 'date'],
   bytes: ['string', 'byte'],
+  // safeint is int64 bounded to 2^53-1: an integer in JSON, never a string.
+  safeint: ['integer', null],
   int32: ['integer', null],
   int64: ['integer', null],
   float64: ['number', null],
