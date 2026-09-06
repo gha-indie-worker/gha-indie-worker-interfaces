@@ -1,0 +1,5 @@
+{
+  "kind": "close",
+  "code": "going_away",
+  "message": "deploy in progress; reconnect"
+}

@@ -1,0 +1,6 @@
+{
+  "subject": "s",
+  "realm": "internal",
+  "audience": "indiebuild-api",
+  "assuranceLevel": 1
+}

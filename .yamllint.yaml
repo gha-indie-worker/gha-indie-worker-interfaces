@@ -1,0 +1,27 @@
+# actionlint understands workflow *semantics* (a bad `needs:`, an expression that
+# cannot be true, a shell that will not parse). yamllint understands the file as
+# YAML. They catch disjoint sets of mistakes, so both run.
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+  document-start: disable
+  truthy:
+    # GitHub Actions' `on:` key is YAML 1.1 truthy. It is not a mistake.
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+
+ignore: |
+  target/
+  node_modules/
+  generated/dart/pubspec.lock

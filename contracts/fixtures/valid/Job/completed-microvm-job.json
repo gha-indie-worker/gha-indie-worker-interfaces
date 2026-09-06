@@ -1,0 +1,12 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a86",
+  "runId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a85",
+  "name": "parity",
+  "status": "completed",
+  "conclusion": "success",
+  "runnerId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a89",
+  "isolation": "microvm",
+  "needs": [],
+  "startedAt": "2026-03-01T12:00:05Z",
+  "completedAt": "2026-03-01T12:03:00Z"
+}

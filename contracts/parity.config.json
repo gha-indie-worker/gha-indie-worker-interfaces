@@ -1,0 +1,152 @@
+{
+  "$comment": "Input to scripts/parity.mjs. This file declares WHAT is compared; it never declares what an answer should be. The two `only` maps and the proto `omits` maps are the only escape hatches, they take a written reason rather than a boolean, and the gate fails if a reason is stale -- so an excuse is a reviewed sentence in a diff, not a silent pass.",
+  "target": "target/parity",
+  "typespec": {
+    "entry": "contracts/typespec/main.tsp",
+    "bundleId": "gha-indie-worker.json",
+    "sources": [
+      "contracts/typespec/main.tsp",
+      "contracts/typespec/session.tsp",
+      "contracts/typespec/http.tsp",
+      "contracts/typespec/discovery.tsp",
+      "contracts/typespec/lease.tsp"
+    ]
+  },
+  "jsonSchema": {
+    "documents": {
+      "contract": "contracts/json-schema/contract.schema.json",
+      "session": "contracts/json-schema/session.schema.json",
+      "errors": "contracts/json-schema/errors.schema.json",
+      "discovery": "contracts/json-schema/discovery.schema.json",
+      "lease": "contracts/json-schema/lease.schema.json"
+    }
+  },
+  "constants": {
+    "PROTOCOL_VERSION": {
+      "document": "session",
+      "keyword": "x-protocol-version"
+    },
+    "MAX_FRAME_BYTES": {
+      "document": "session",
+      "keyword": "x-max-frame-bytes"
+    }
+  },
+  "only": {
+    "typespec": {
+      "Page": "A generic envelope, `Page<T>`. JSON Schema 2020-12 has no type parameters, so a $defs peer would have to be written out once per item type -- four hand-copied envelopes that could drift from each other, which is strictly worse evidence than one generic with no peer. The envelope's non-generic half, PageInfo, DOES have a peer and is compared.",
+      "ListQuery": "A bag of `@query` parameters spread into operations. Query parameters are an HTTP binding, not a body member; there is no JSON document for a JSON Schema to describe."
+    },
+    "jsonSchema": {}
+  },
+  "proto": {
+    "$comment": "Protobuf is not a third authority. TypeSpec and JSON Schema say what a frame IS; proto says how it is validated at runtime on the binary transport. So every binding below is checked against BOTH authorities and must agree with both -- proto is never allowed to be the tiebreak.",
+    "files": {
+      "contracts/proto/session.proto": {
+        "enums": {
+          "ErrorCode": "ErrorCode"
+        },
+        "unions": {
+          "Frame": "Frame"
+        },
+        "messages": {
+          "HelloFrame": {
+            "model": "HelloFrame",
+            "omits": {
+              "kind": "The discriminator is the `oneof kind` tag NUMBER in Frame, not a repeated string field. Carrying it twice on the binary transport would let the tag and the field disagree."
+            }
+          },
+          "WelcomeFrame": {
+            "model": "WelcomeFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "PingFrame": {
+            "model": "PingFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "PongFrame": {
+            "model": "PongFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "SubscribeFrame": {
+            "model": "SubscribeFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "UnsubscribeFrame": {
+            "model": "UnsubscribeFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "CreditFrame": {
+            "model": "CreditFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "EventFrame": {
+            "model": "EventFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "LaggedFrame": {
+            "model": "LaggedFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "CommandFrame": {
+            "model": "CommandFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "AckFrame": {
+            "model": "AckFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "ErrorFrame": {
+            "model": "ErrorFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          },
+          "CloseFrame": {
+            "model": "CloseFrame",
+            "omits": {
+              "kind": "Discriminated by the oneof tag number; see HelloFrame."
+            }
+          }
+        }
+      },
+      "contracts/proto/events.proto": {
+        "enums": {
+          "RunStatus": "RunStatus",
+          "RunConclusion": "RunConclusion",
+          "IsolationMode": "IsolationMode"
+        },
+        "messages": {
+          "RunEvent": "Run",
+          "JobEvent": "Job"
+        }
+      }
+    }
+  },
+  "publishedSchemas": {
+    "$comment": "schema/v1/workerlease.json is a standalone document this repository already publishes at a stable $id. It is the SAME type as lease.schema.json#/$defs/WorkerLease, and the two must not drift: the published artifact is what consumers fetch, the $defs peer is what the parity gate compares against the TypeSpec authority. This check is what keeps the published contract and the new toolkit from becoming two unrelated truths.",
+    "schema/v1/workerlease.json": {
+      "document": "lease",
+      "model": "WorkerLease"
+    }
+  }
+}

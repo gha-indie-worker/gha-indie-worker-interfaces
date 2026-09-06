@@ -13,4 +13,24 @@
 [lints.rust]
 unsafe_code = "forbid"
 
-
+# Lint policy travels with the crate, so `cargo clippy`, rust-analyzer and any
+# dependent build all see the same rules. Thresholds live in clippy.toml.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# A contract crate parses and validates. A panic in it is a denial of service in
+# every server that links it, so the panicking constructs are denied outright.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+# Silent numeric truncation in a type that describes a wire format is a data bug
+# with no error message -- exactly what a contract exists to prevent.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_precision_loss = "deny"
+# Public API of the fleet: every item says what it means.
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+module_name_repetitions = "allow"

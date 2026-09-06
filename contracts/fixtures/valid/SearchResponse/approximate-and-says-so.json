@@ -1,0 +1,5 @@
+{
+  "neighbours": [],
+  "exact": false,
+  "strategy": "binary_full_rerank"
+}

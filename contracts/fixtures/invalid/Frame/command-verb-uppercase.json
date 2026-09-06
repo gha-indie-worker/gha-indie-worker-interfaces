@@ -1,0 +1,6 @@
+{
+  "kind": "command",
+  "id": 1,
+  "verb": "Runs.Cancel",
+  "payload": ""
+}

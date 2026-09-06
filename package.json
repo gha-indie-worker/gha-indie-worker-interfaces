@@ -1,0 +1,25 @@
+{
+  "name": "@gha-indie-worker/interfaces-toolchain",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Toolchain for the two contract authorities. Not published: generated/typescript is the published package. This manifest exists so `npm ci` pins the compiler and linters CI runs.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "parity": "node scripts/parity.mjs",
+    "lint:schema": "node scripts/lint-schemas.mjs",
+    "lint:ts": "biome ci . && tsc --noEmit",
+    "lint:tsp": "tsp format --check \"contracts/typespec/**/*.tsp\" && tsp compile contracts/typespec/main.tsp --no-emit --warn-as-error",
+    "fmt": "biome format --write . && tsp format \"contracts/typespec/**/*.tsp\""
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.1.2",
+    "@oresoftware/ores-contracts": "^0.1.0",
+    "@typespec/compiler": "^1.0.0",
+    "@typespec/http": "^1.0.0",
+    "@typespec/json-schema": "^1.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.6.0"
+  }
+}

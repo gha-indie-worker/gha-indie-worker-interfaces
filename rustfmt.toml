@@ -1,0 +1,14 @@
+# One formatting answer, so a diff is only ever a semantic change.
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Max"
+newline_style = "Unix"
+# Keep imports in one deterministic block: an import diff should be readable.
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+# Formatting the docs too means a doc example that stops compiling is visible.
+format_code_in_doc_comments = true
+format_macro_matchers = true
+normalize_comments = true
+wrap_comments = true
+comment_width = 100

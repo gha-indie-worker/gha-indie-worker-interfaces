@@ -1,0 +1,19 @@
+# Thresholds, not lint selection: which lints run is declared in Cargo.toml
+# `[lints.clippy]`, so it travels with the crate and applies to `cargo clippy`,
+# rust-analyzer and any dependent build alike.
+
+# This crate is data-only interfaces. A function long enough to need this many
+# lines is doing work that belongs in lib-core, not in a contract type.
+too-many-lines-threshold = 60
+type-complexity-threshold = 250
+too-many-arguments-threshold = 6
+
+# A contract type is public API: every public item states its safety and its
+# panics or it does not merge.
+missing-docs-in-crate-items = true
+
+# Names that read as noise in a domain vocabulary.
+disallowed-names = ["foo", "bar", "baz", "tmp", "data", "val", "obj"]
+
+# The MSRV the fleet builds against; clippy will not suggest newer APIs.
+msrv = "1.78"

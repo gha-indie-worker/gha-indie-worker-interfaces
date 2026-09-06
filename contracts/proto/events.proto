@@ -1,0 +1,74 @@
+// ============================================================================
+// Protobuf v3 — runtime-validated run and job lifecycle events.
+//
+// These are the payloads carried in EventFrame.payload on the `runs/<orgId>`
+// and `jobs/<runId>` streams. Same discipline as session.proto: a field number
+// is never reused, removal means `reserved` on both the number and the name.
+//
+// The enums here mirror the contract enums one-for-one; scripts/parity.mjs maps
+// SCREAMING_SNAKE proto values back to the contract's snake_case strings and
+// fails if either side has a value the other does not.
+// ============================================================================
+syntax = "proto3";
+
+package gha_indie_worker.events.v1;
+
+option java_package = "dev.indiebuild.gha.events.v1";
+option go_package = "github.com/gha-indie-worker/gha-indie-worker-interfaces/gen/events/v1;eventsv1";
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_QUEUED = 1;
+  RUN_STATUS_IN_PROGRESS = 2;
+  RUN_STATUS_COMPLETED = 3;
+}
+
+enum RunConclusion {
+  RUN_CONCLUSION_UNSPECIFIED = 0;
+  RUN_CONCLUSION_SUCCESS = 1;
+  RUN_CONCLUSION_FAILURE = 2;
+  RUN_CONCLUSION_CANCELLED = 3;
+  RUN_CONCLUSION_SKIPPED = 4;
+  RUN_CONCLUSION_TIMED_OUT = 5;
+  RUN_CONCLUSION_ACTION_REQUIRED = 6;
+  RUN_CONCLUSION_NEUTRAL = 7;
+}
+
+enum IsolationMode {
+  ISOLATION_MODE_UNSPECIFIED = 0;
+  ISOLATION_MODE_PROCESS = 1;
+  ISOLATION_MODE_ROOTLESS = 2;
+  ISOLATION_MODE_MICROVM = 3;
+  ISOLATION_MODE_PER_JOB_VM = 4;
+}
+
+// A run changed state. Emitted on every transition, never coalesced: a consumer
+// that misses one gets a Lagged frame rather than a silently merged history.
+message RunEvent {
+  string id = 1;
+  string workflow_id = 2;
+  string org_id = 3;
+  uint64 run_number = 4;
+  uint32 attempt = 5;
+  RunStatus status = 6;
+  optional RunConclusion conclusion = 7;
+  string head_sha = 8;
+  string event = 9;
+  string created_at = 10;
+  optional string started_at = 11;
+  optional string completed_at = 12;
+}
+
+// A job changed state.
+message JobEvent {
+  string id = 1;
+  string run_id = 2;
+  string name = 3;
+  RunStatus status = 4;
+  optional RunConclusion conclusion = 5;
+  optional string runner_id = 6;
+  IsolationMode isolation = 7;
+  repeated string needs = 8;
+  optional string started_at = 9;
+  optional string completed_at = 10;
+}

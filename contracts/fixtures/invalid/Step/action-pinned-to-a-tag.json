@@ -1,0 +1,9 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a87",
+  "jobId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a86",
+  "number": 3,
+  "name": "Compare authorities",
+  "status": "completed",
+  "conclusion": "success",
+  "usesRef": "actions/checkout@v4"
+}

@@ -2,3 +2,5 @@ name = "gha-indie-worker-interfaces"
 kind = "interfaces"
 version = "0.1.0"
 
+[dependencies]
+"oresoftware/ores-contracts" = "^0.1.0"

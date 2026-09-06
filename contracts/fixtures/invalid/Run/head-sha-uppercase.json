@@ -1,0 +1,14 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a85",
+  "workflowId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a84",
+  "orgId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a80",
+  "runNumber": 412,
+  "attempt": 1,
+  "status": "completed",
+  "conclusion": "success",
+  "headSha": "9F1A2B3C4D5E6F708192A3B4C5D6E7F809A1B2C3",
+  "event": "push",
+  "createdAt": "2026-03-01T12:00:00Z",
+  "startedAt": "2026-03-01T12:00:04Z",
+  "completedAt": "2026-03-01T12:07:31Z"
+}

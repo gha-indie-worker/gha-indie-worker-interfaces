@@ -1,0 +1,32 @@
+# cargo-deny: supply chain policy. `cargo audit` answers "is there a known CVE";
+# this answers the questions audit does not -- may we legally ship this licence,
+# is a crate unmaintained, are we compiling three versions of the same library,
+# and is a dependency coming from a registry we did not choose.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive only. A copyleft dependency in an interfaces crate would propagate
+# to every consumer in the fleet, which is a decision for a human, not a build.
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CC0-1.0"]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Two serde majors in one dependency graph means two incompatible derive macros
+# and a type that silently fails to round-trip.
+deny = [{ crate = "openssl", reason = "use rustls; an OpenSSL build is not reproducible across the fleet's runner images" }]
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

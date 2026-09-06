@@ -1,0 +1,12 @@
+{
+  "statusCode": 409,
+  "code": "forbidden",
+  "message": "no seats available",
+  "requestId": "01J8Z9Q4R7XK2M5N6P7Q8R9S0V",
+  "onboarding": {
+    "reason": "no_seats_available",
+    "purchased": 25,
+    "occupied": 24,
+    "reserved": 1
+  }
+}

@@ -1,0 +1,12 @@
+# `tsp compile` configuration. The emitted JSON Schema is EVIDENCE, not a source:
+# it lands under target/, which is disposable and git-ignored, and it is compared
+# against the hand-authored contracts/json-schema/ by scripts/parity.mjs. Nothing
+# in this repo consumes it directly, and nothing is ever written back from it.
+emit:
+  - "@typespec/json-schema"
+options:
+  "@typespec/json-schema":
+    emitter-output-dir: "{project-root}/target/parity/typespec-emitted"
+    file-type: json
+    bundleId: gha-indie-worker.json
+warn-as-error: true

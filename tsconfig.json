@@ -1,0 +1,26 @@
+{
+  "$comment": "Type-checking only. Biome does not type-check and never will (it has no type information), so `tsc --noEmit` is the second half of the TypeScript lane. generated/typescript is types-only by policy, so there is nothing to emit.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "noEmit": true
+  },
+  "include": ["generated/typescript/src/**/*.ts"]
+}

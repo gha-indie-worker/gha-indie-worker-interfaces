@@ -1,0 +1,17 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a8d",
+  "tenant": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a80",
+  "entity": "run-log",
+  "model": "text-embedding-3-large",
+  "modelRevision": "2026-01",
+  "dimensions": 3072,
+  "metric": "cosine",
+  "embeddingRole": "document",
+  "promptProfile": "run-log-v1",
+  "chunkProfile": "lines-200",
+  "normalization": "l2",
+  "truncatedTo": 1024,
+  "contractVersion": "1.0.0",
+  "annStrategy": "halfvec_exact",
+  "enabled": false
+}

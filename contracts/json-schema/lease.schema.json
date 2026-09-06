@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/lease.schema.json",
+  "title": "GHA Indie Worker v1 lease protocol",
+  "$comment": "HUMAN-AUTHORED PEER AUTHORITY of contracts/typespec/lease.tsp. Neither is generated from the other. WorkerLease here is the same type as the published schema/v1/workerlease.json, and scripts/parity.mjs checks the two still agree -- the published v1 document keeps its $id and its shape and gains a second authority instead of being replaced by one. `id` and `revision` are deliberately unbounded above, exactly as v1 has them; adding a maximum here would tighten a contract consumers are already coded against.",
+  "$defs": {
+    "LeaseErrorCode": {
+      "description": "Why a lease was refused. `InterfaceError` in src/error.rs; the crate parses and validates, so these are the only three ways parsing fails.",
+      "type": "string",
+      "enum": [
+        "empty_id",
+        "empty_revision",
+        "schema_mismatch"
+      ]
+    },
+    "WorkerLease": {
+      "description": "A worker's claim on a unit of work. `protocol::WorkerLease`; published as schema/v1/workerlease.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "description": "Lease identity. Non-empty; deliberately unbounded above, as the published v1 schema has it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "description": "Schema revision the payload conforms to, e.g. `gha-indie-worker-0001`. A consumer that does not know the revision refuses the lease rather than guessing.",
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "description": "Lease body, shaped by `revision`. Free-form here on purpose: this envelope is versioned by `revision`, and typing the payload in the envelope would make every payload change an envelope change.",
+          "type": "object"
+        }
+      }
+    },
+    "Health": {
+      "description": "Liveness answer. `protocol::Health`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "service",
+        "protocol"
+      ],
+      "properties": {
+        "ok": {
+          "description": "False only when the service is up enough to answer and still unable to serve.",
+          "type": "boolean"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "protocol": {
+          "description": "Wire protocol version as a string. `protocol::PROTOCOL_VERSION`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        }
+      }
+    }
+  }
+}

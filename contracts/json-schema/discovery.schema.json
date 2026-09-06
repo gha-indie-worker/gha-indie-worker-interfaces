@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/discovery.schema.json",
+  "title": "GHA Indie Worker embedding and discovery surface",
+  "$comment": "HUMAN-AUTHORED PEER AUTHORITY of contracts/typespec/discovery.tsp. Neither is generated from the other. Persisted ComparisonSpace and Finding live in contract.schema.json; this document covers the request/response bodies.",
+  "$defs": {
+    "AnnStrategy": {
+      "description": "Index strategy. Anything but `halfvec_exact` can return a wrong neighbour.",
+      "type": "string",
+      "enum": [
+        "halfvec_exact",
+        "halfvec_mrl",
+        "binary_full_rerank"
+      ]
+    },
+    "Evidence": {
+      "description": "What has been measured about a comparison space. Every field must be true before an approximate strategy may be enabled. `analysis::embedding::Evidence`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "migrationReplay",
+        "tenantIsolation",
+        "lexicalOnlyRetrieval",
+        "exactVsAnnRecall",
+        "rollback",
+        "backupRestore"
+      ],
+      "properties": {
+        "migrationReplay": {
+          "description": "The space survives a replay of every migration that touches it.",
+          "type": "boolean"
+        },
+        "tenantIsolation": {
+          "description": "No query in the space can return another tenant's row.",
+          "type": "boolean"
+        },
+        "lexicalOnlyRetrieval": {
+          "description": "Retrieval still works with vectors switched off, so a regression is not silent.",
+          "type": "boolean"
+        },
+        "exactVsAnnRecall": {
+          "description": "Exact scan and the approximate index were compared and the recall recorded.",
+          "type": "boolean"
+        },
+        "rollback": {
+          "description": "The change can be rolled back without dropping the column.",
+          "type": "boolean"
+        },
+        "backupRestore": {
+          "description": "A backup taken before the change restores cleanly.",
+          "type": "boolean"
+        }
+      }
+    },
+    "EnableSpaceRequest": {
+      "description": "Turn a comparison space on. Refused unless the evidence supports the requested strategy.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "annStrategy",
+        "evidence"
+      ],
+      "properties": {
+        "annStrategy": {
+          "$ref": "#/$defs/AnnStrategy"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "measuredRecall": {
+          "description": "Measured recall against exact scan, in [0, 1]. Required for anything but `halfvec_exact`.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "SearchRequest": {
+      "description": "A nearest-neighbour query inside one comparison space.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "topK"
+      ],
+      "properties": {
+        "text": {
+          "description": "Query text. Encoded with the space's own prompt profile, never a different one.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "topK": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "minScore": {
+          "description": "Reject neighbours below this similarity. Absent means return the top K regardless.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "Neighbour": {
+      "description": "One neighbour. `score` is in the space's own metric, normalized to [0, 1].",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityId",
+        "score",
+        "excerpt"
+      ],
+      "properties": {
+        "entityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "excerpt": {
+          "description": "The chunk that matched, for a human to read. Never the whole document.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      }
+    },
+    "SearchResponse": {
+      "description": "Answer to a search. `exact` is false when an approximate index served the query, so a caller can tell a measured answer from an estimated one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "neighbours",
+        "exact",
+        "strategy"
+      ],
+      "properties": {
+        "neighbours": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/Neighbour"
+          }
+        },
+        "exact": {
+          "type": "boolean"
+        },
+        "strategy": {
+          "$ref": "#/$defs/AnnStrategy"
+        }
+      }
+    }
+  }
+}

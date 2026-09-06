@@ -1,0 +1,16 @@
+{
+  "neighbours": [
+    {
+      "entityId": "run:a",
+      "score": 0.91,
+      "excerpt": "linker not found"
+    },
+    {
+      "entityId": "run:b",
+      "score": 0.64,
+      "excerpt": "linker missing"
+    }
+  ],
+  "exact": true,
+  "strategy": "halfvec_exact"
+}

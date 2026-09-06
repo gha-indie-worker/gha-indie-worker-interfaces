@@ -1,0 +1,12 @@
+{
+  "annStrategy": "halfvec_mrl",
+  "evidence": {
+    "migrationReplay": true,
+    "tenantIsolation": true,
+    "lexicalOnlyRetrieval": true,
+    "exactVsAnnRecall": true,
+    "rollback": true,
+    "backupRestore": true
+  },
+  "measuredRecall": 0.982
+}

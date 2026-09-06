@@ -10,3 +10,12 @@
 *.sqlite
 Cargo.lock
 
+# contract toolchain (added by the interfaces bundle)
+# disposable output of the parity gate; deleted at the start of every run
+/target/parity
+# disposable output of `ores-contracts check`
+/target/ores-contracts
+/generated/typescript/node_modules
+/generated/dart/.dart_tool
+/.biome-cache
+__pycache__/
