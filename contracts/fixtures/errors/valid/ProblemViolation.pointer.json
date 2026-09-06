@@ -1,0 +1,7 @@
+{
+  "id": "0000005b-1111-4222-8333-444455556666",
+  "problemId": "0000005a-1111-4222-8333-444455556666",
+  "pointer": "/jobs/build/strategy/matrix",
+  "rule": "dynamic-matrix-forbidden",
+  "message": "matrix values must be static for the independent lane"
+}

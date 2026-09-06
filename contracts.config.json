@@ -1,0 +1,23 @@
+{
+  "$comment": "ores-contracts: both authorities are human-authored peers; neither is generated from the other. The toolkit parses ONE file per authority, so this repository keeps one config per slice under contracts/config/. The top-level keys below are the default `npx ores-contracts check` target (the identity slice); `npm run contracts:check:all` sweeps every slice listed in `slices`.",
+  "typespec": "contracts/typespec/identity.tsp",
+  "jsonSchema": "contracts/json-schema/identity.schema.json",
+  "out": "generated/identity",
+  "target": "target/ores-contracts/identity",
+  "artifacts": ["sql/schema.sql", "rust/types.rs", "seaorm/entities.rs", "diesel/schema.rs", "typescript/types.d.ts", "typescript/validate.mjs", "dart/models.dart"],
+  "tspCompile": true,
+  "slices": [
+    "identity",
+    "onboarding",
+    "runs",
+    "workers",
+    "webhooks",
+    "chat",
+    "embeddings",
+    "sync",
+    "transport",
+    "errors"
+  ],
+  "sliceConfigDir": "contracts/config",
+  "fixturesDir": "contracts/fixtures"
+}

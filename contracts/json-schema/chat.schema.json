@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/chat.schema.json",
+  "title": "GHA Indie Worker — chat",
+  "description": "Independently authored JSON Schema authority for the ores-chat surfaces. Peer of contracts/typespec/chat.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Chat",
+  "$defs": {
+    "ChatSurface": {
+      "type": "string",
+      "description": "Which ores-chat surface a session belongs to. visitor is anonymous marketing, owner is the internal owner console.",
+      "enum": ["visitor", "customer", "internal", "owner"]
+    },
+    "ChatRole": {
+      "type": "string",
+      "enum": ["user", "agent", "system"]
+    },
+    "ChatSessionStatus": {
+      "type": "string",
+      "enum": ["open", "assigned", "resolved", "abandoned"]
+    },
+    "ChatSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One chat conversation. A visitor session has no org or user until it is claimed by a sign-in.",
+      "x-ores-table": "chat_sessions",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["visitorToken"]],
+      "x-ores-indexes": [["surface", "status"], ["orgId", "lastActivityAt"]],
+      "required": ["id", "surface", "status", "startedAt", "lastActivityAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "surface": { "$ref": "#/$defs/ChatSurface" },
+        "orgId": { "type": "string", "format": "uuid" },
+        "userId": { "type": "string", "format": "uuid" },
+        "visitorToken": { "type": "string", "minLength": 16, "maxLength": 128 },
+        "status": { "$ref": "#/$defs/ChatSessionStatus" },
+        "subject": { "type": "string", "maxLength": 200 },
+        "assignedTo": { "type": "string", "format": "uuid" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "lastActivityAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ChatMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One message in a session. Sequence is dense per session so websocket replay is exact.",
+      "x-ores-table": "chat_messages",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["sessionId", "sequence"]],
+      "x-ores-indexes": [["sentAt"]],
+      "required": ["id", "sessionId", "sequence", "role", "body", "redacted", "attachments", "sentAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "sessionId": { "type": "string", "format": "uuid", "x-ores-references": "ChatSession.id" },
+        "sequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "role": { "$ref": "#/$defs/ChatRole" },
+        "body": { "type": "string", "maxLength": 8000 },
+        "redacted": { "type": "boolean" },
+        "attachments": { "type": "array", "items": { "type": "string" }, "maxItems": 16 },
+        "sentAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

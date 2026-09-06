@@ -1,0 +1,9 @@
+{
+  "id": "00000016-1111-4222-8333-444455556666",
+  "jobId": "00000017-1111-4222-8333-444455556666",
+  "sequence": 0,
+  "offsetBytes": 0,
+  "body": "cargo fmt --all -- --check\n",
+  "truncated": false,
+  "emittedAt": "2026-03-14T09:27:31Z"
+}

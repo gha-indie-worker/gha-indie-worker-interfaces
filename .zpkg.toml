@@ -2,3 +2,8 @@ name = "gha-indie-worker-interfaces"
 kind = "interfaces"
 version = "0.1.0"
 
+org = "gha-indie-worker"
+language = "rust"
+
+[dev-dependencies]
+"oresoftware/ores-contracts" = "^0.1.0"

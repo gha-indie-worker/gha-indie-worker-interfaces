@@ -1,0 +1,17 @@
+{
+  "$comment": "ores-contracts config for the chat slice. Paths resolve relative to this file. The two authorities are independent peers; neither is generated from the other.",
+  "typespec": "../typespec/chat.tsp",
+  "jsonSchema": "../json-schema/chat.schema.json",
+  "out": "../../generated/chat",
+  "target": "../../target/ores-contracts/chat",
+  "artifacts": [
+    "sql/schema.sql",
+    "rust/types.rs",
+    "seaorm/entities.rs",
+    "diesel/schema.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/identity.schema.json",
+  "title": "GHA Indie Worker — identity",
+  "description": "Independently authored JSON Schema authority. Not generated from contracts/typespec/identity.tsp; the two are peers and must agree in the ores-contracts parity gate.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Identity",
+  "$defs": {
+    "Role": {
+      "type": "string",
+      "enum": ["owner", "admin", "member", "billing"]
+    },
+    "InvitationStatus": {
+      "type": "string",
+      "enum": ["pending", "accepted", "revoked", "expired"]
+    },
+    "SeatStatus": {
+      "type": "string",
+      "enum": ["active", "suspended", "released"]
+    },
+    "Org": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A billing and ownership boundary. Every run, worker and seat hangs off exactly one org.",
+      "x-ores-table": "orgs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["slug"]],
+      "x-ores-indexes": [["githubLogin"]],
+      "required": ["id", "slug", "displayName", "seatLimit", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "slug": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "displayName": { "type": "string", "maxLength": 200, "minLength": 1 },
+        "billingEmail": { "type": "string", "maxLength": 320, "pattern": "^[^@ ]+@[^@ ]+[.][^@ ]+$" },
+        "githubLogin": { "type": "string", "maxLength": 64 },
+        "seatLimit": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "deletedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "User": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A human principal. Identity is federated by shared-auth over Supabase Auth and Neon Auth.",
+      "x-ores-table": "users",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["sharedAuthSubject"], ["email"]],
+      "required": ["id", "sharedAuthSubject", "email", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "sharedAuthSubject": { "type": "string", "maxLength": 255, "minLength": 1 },
+        "email": { "type": "string", "maxLength": 320, "pattern": "^[^@ ]+@[^@ ]+[.][^@ ]+$" },
+        "displayName": { "type": "string", "maxLength": 200 },
+        "githubLogin": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastSeenAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "OrgMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Membership of a user in an org, carrying exactly one role.",
+      "x-ores-table": "org_members",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "userId"]],
+      "x-ores-indexes": [["userId"]],
+      "required": ["id", "orgId", "userId", "role", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "userId": { "type": "string", "format": "uuid", "x-ores-references": "User.id" },
+        "role": { "$ref": "#/$defs/Role" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "invitedBy": { "type": "string", "format": "uuid", "x-ores-references": "User.id" }
+      }
+    },
+    "Invitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A pending or settled invitation to join an org at a given role.",
+      "x-ores-table": "org_invitations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "email"]],
+      "x-ores-indexes": [["token"]],
+      "required": ["id", "orgId", "email", "role", "status", "token", "createdAt", "expiresAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "email": { "type": "string", "maxLength": 320, "pattern": "^[^@ ]+@[^@ ]+[.][^@ ]+$" },
+        "role": { "$ref": "#/$defs/Role" },
+        "status": { "$ref": "#/$defs/InvitationStatus" },
+        "token": { "type": "string", "maxLength": 128, "minLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "acceptedBy": { "type": "string", "format": "uuid", "x-ores-references": "User.id" }
+      }
+    },
+    "Seat": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A paid seat in an org. A seat may be held by no user while it is being reassigned.",
+      "x-ores-table": "org_seats",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["orgId", "status"]],
+      "required": ["id", "orgId", "status"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "userId": { "type": "string", "format": "uuid", "x-ores-references": "User.id" },
+        "status": { "$ref": "#/$defs/SeatStatus" },
+        "assignedAt": { "type": "string", "format": "date-time" },
+        "releasedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

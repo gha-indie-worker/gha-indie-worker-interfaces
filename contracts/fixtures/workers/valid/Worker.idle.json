@@ -1,0 +1,11 @@
+{
+  "id": "0000001e-1111-4222-8333-444455556666",
+  "name": "giw-linux-amd64-01",
+  "status": "idle",
+  "arch": "x86_64",
+  "os": "linux",
+  "imageDigest": "sha256-abababababababababababababababababababababababababababababababab",
+  "maxConcurrency": 4,
+  "registeredAt": "2026-03-14T09:26:53Z",
+  "lastHeartbeatAt": "2026-03-14T09:27:31Z"
+}

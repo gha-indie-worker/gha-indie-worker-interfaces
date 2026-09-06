@@ -1,0 +1,7 @@
+{
+  "id": "0000005a-1111-4222-8333-444455556666",
+  "type": "https://indiebuild.dev/problems/plan-unsupported",
+  "title": "Workflow is outside the independent subset",
+  "status": "422",
+  "occurredAt": "2026-03-14T09:26:53Z"
+}

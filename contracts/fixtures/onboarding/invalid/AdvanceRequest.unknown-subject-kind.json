@@ -1,0 +1,8 @@
+{
+  "id": "0000000b-1111-4222-8333-444455556666",
+  "subjectKind": "team",
+  "subjectId": "00000003-1111-4222-8333-444455556666",
+  "event": "email.verified",
+  "idempotencyKey": "onboard-user-3-email",
+  "requestedAt": "2026-03-14T09:26:53Z"
+}

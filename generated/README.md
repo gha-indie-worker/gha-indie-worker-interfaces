@@ -41,3 +41,39 @@ JSON Schema is a **cross-check**, not always the primary generator input. Unit t
 should validate fixtures/examples against Draft 2020-12 at runtime (valid must pass,
 invalid must fail) and compare schema keys to `.cli-flags.toml` env names or
 route-map keys when those exist.
+
+## ores-contracts output (`generated/<slice>/`)
+
+Since the `contracts/` adoption, the bulk of this directory is written by
+[`ores-contracts`](https://github.com/ORESoftware/ores-contracts) from the **two
+independent authorities** in `contracts/`:
+
+```sh
+npm run contracts:generate        # node scripts/contracts-slices.mjs generate
+```
+
+That command runs the toolkit once per slice. For each slice it parses
+`contracts/typespec/<slice>.tsp` and `contracts/json-schema/<slice>.schema.json`
+*separately*, emits every artifact from each parse, and byte-compares the two
+lanes. Nothing is written unless the lanes agree; a disagreement is a finding in
+`target/ores-contracts/<slice>/receipt.json` and the run stops for human
+evaluation. **Neither authority is generated from the other, and neither is
+generated from `src/v1/`.**
+
+Per slice you get:
+
+```text
+generated/<slice>/sql/schema.sql            # DDL input for declarative-migrations / dpm
+generated/<slice>/rust/types.rs             # serde types
+generated/<slice>/seaorm/entities.rs        # code-first ORM entities
+generated/<slice>/diesel/schema.rs          # db-first mirror; `diesel print-schema` must equal it
+generated/<slice>/typescript/types.d.ts
+generated/<slice>/typescript/validate.mjs
+generated/<slice>/dart/models.dart
+generated/<slice>/receipt.json              # the parity receipt for this generation
+```
+
+The runner lane — not a developer's laptop — runs `npm run contracts:generate`
+and commits the result, and `.github/workflows/contracts.yml` re-runs it and
+fails on `git diff --exit-code -- generated`. So the rule above still holds:
+**do not hand-edit anything here.** Change an authority in `contracts/` instead.

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/onboarding.schema.json",
+  "title": "GHA Indie Worker — onboarding",
+  "description": "Independently authored JSON Schema authority for the org and user onboarding state machines. Peer of contracts/typespec/onboarding.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Onboarding",
+  "x-ores-transitions": {
+    "$comment": "Runtime-only annotation. The allowed edges are duplicated in gha-indie-worker-lib-core::onboarding and asserted by its exhaustive transition-table test.",
+    "org": {
+      "created": ["org-profile", "suspended"],
+      "org-profile": ["billing-linked", "suspended"],
+      "billing-linked": ["github-app-installed", "suspended"],
+      "github-app-installed": ["first-workflow-planned", "suspended"],
+      "first-workflow-planned": ["active", "suspended"],
+      "active": ["suspended"],
+      "suspended": ["active"]
+    },
+    "user": {
+      "created": ["email-verified", "dormant"],
+      "email-verified": ["profile-complete", "dormant"],
+      "profile-complete": ["org-joined", "dormant"],
+      "org-joined": ["active", "dormant"],
+      "active": ["dormant"],
+      "dormant": ["active"]
+    }
+  },
+  "$defs": {
+    "OrgOnboardingState": {
+      "type": "string",
+      "enum": ["created", "org-profile", "billing-linked", "github-app-installed", "first-workflow-planned", "active", "suspended"]
+    },
+    "UserOnboardingState": {
+      "type": "string",
+      "enum": ["created", "email-verified", "profile-complete", "org-joined", "active", "dormant"]
+    },
+    "OnboardingSubjectKind": {
+      "type": "string",
+      "enum": ["org", "user"]
+    },
+    "OnboardingOutcome": {
+      "type": "string",
+      "enum": ["advanced", "already-there", "rejected"]
+    },
+    "OrgOnboardingTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One accepted org-onboarding state transition. The table is the audit log of the org state machine.",
+      "x-ores-table": "org_onboarding_transitions",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "sequence"]],
+      "x-ores-indexes": [["orgId", "occurredAt"]],
+      "required": ["id", "orgId", "sequence", "fromState", "toState", "event", "occurredAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid" },
+        "sequence": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fromState": { "$ref": "#/$defs/OrgOnboardingState" },
+        "toState": { "$ref": "#/$defs/OrgOnboardingState" },
+        "event": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "actorUserId": { "type": "string", "format": "uuid" }
+      }
+    },
+    "UserOnboardingTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One accepted user-onboarding state transition.",
+      "x-ores-table": "user_onboarding_transitions",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["userId", "sequence"]],
+      "x-ores-indexes": [["userId", "occurredAt"]],
+      "required": ["id", "userId", "sequence", "fromState", "toState", "event", "occurredAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "userId": { "type": "string", "format": "uuid" },
+        "sequence": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fromState": { "$ref": "#/$defs/UserOnboardingState" },
+        "toState": { "$ref": "#/$defs/UserOnboardingState" },
+        "event": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AdvanceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A request to advance an onboarding state machine by one event. Replayable through idempotencyKey.",
+      "x-ores-table": "onboarding_advance_requests",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["idempotencyKey"]],
+      "x-ores-indexes": [["subjectKind", "subjectId"]],
+      "required": ["id", "subjectKind", "subjectId", "event", "idempotencyKey", "requestedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "subjectKind": { "$ref": "#/$defs/OnboardingSubjectKind" },
+        "subjectId": { "type": "string", "format": "uuid" },
+        "event": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "requestedBy": { "type": "string", "format": "uuid" }
+      }
+    },
+    "AdvanceResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The settled outcome of an AdvanceRequest. Exactly one of orgState or userState is present.",
+      "x-ores-table": "onboarding_advance_responses",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["requestId"]],
+      "x-ores-indexes": [["outcome", "respondedAt"]],
+      "required": ["id", "requestId", "outcome", "respondedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "requestId": { "type": "string", "format": "uuid", "x-ores-references": "AdvanceRequest.id" },
+        "outcome": { "$ref": "#/$defs/OnboardingOutcome" },
+        "orgState": { "$ref": "#/$defs/OrgOnboardingState" },
+        "userState": { "$ref": "#/$defs/UserOnboardingState" },
+        "reason": { "type": "string", "maxLength": 200 },
+        "respondedAt": { "type": "string", "format": "date-time" }
+      },
+      "x-ores-invariants": [
+        "exactly one of orgState or userState is present, matching the subjectKind of the referenced AdvanceRequest"
+      ]
+    }
+  }
+}

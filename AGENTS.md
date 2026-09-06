@@ -39,3 +39,32 @@ Functional programming is mostly the following:
 + composition
 + effects pushed outward
 + illegal states excluded by types
+
+## Contracts protocol (ores-contracts)
+
+**TypeSpec and JSON Schema are independent, human-authored, top-level
+authorities. Neither is generated from the other.** This is the single most
+important rule in this repository:
+
+* never write a `.tsp` by running a converter over a `.schema.json`, or the
+  reverse — `ores-contracts bootstrap` exists only to *draft* a new authority,
+  and its output must be reviewed and re-authored before it counts;
+* never hand-edit `generated/**` — change an authority instead;
+* never resolve a parity finding by editing whichever authority is "wrong". A
+  finding means the two documents disagree about meaning: decide what the
+  contract should say, then change both deliberately;
+* a new field is three edits — the `.tsp`, the `.schema.json` and `src/v1/` — plus
+  at least one fixture. `tests/fixtures_roundtrip.rs` fails if a model exists in
+  the JSON Schema authority with no Rust mirror.
+
+The parity IR is persistence-shaped, so every model carries a table name and a
+primary key, tagged unions are a sealed object plus a `kind` discriminator, and
+value bounds (`minimum`, `pattern`, `maxItems`, …) are runtime refinements that
+both authorities still state. `contracts/README.md` has the details, including the
+two syntax traps in the toolkit's TypeSpec parser (no braces inside a model body,
+no `)` inside a decorator argument).
+
+Fixtures are three-way: `valid/` must pass both the JSON Schema validator and
+serde, `invalid/` must fail both, and `invalid/schema-only/` must fail the
+validator while still parsing under serde. Filing one in the wrong directory is a
+test failure with a message that names the right directory.

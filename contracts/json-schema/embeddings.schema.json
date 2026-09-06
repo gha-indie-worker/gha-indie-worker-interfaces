@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/embeddings.schema.json",
+  "title": "GHA Indie Worker — embeddings",
+  "description": "Independently authored JSON Schema authority for comparison spaces, vectors, search and regression analysis. Peer of contracts/typespec/embeddings.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Embeddings",
+  "x-ores-invariants": [
+    "two vectors are comparable only when all twelve ComparisonSpace identity fields are equal",
+    "EmbeddingRecord.dims equals ComparisonSpace.dimsNative unless annStrategy is halfvec-mrl, where dims may be any retained matryoshka prefix",
+    "SearchResponse.matchedEntityIds and SearchResponse.scores are positionally aligned and of equal length"
+  ],
+  "$defs": {
+    "EmbeddingRole": {
+      "type": "string",
+      "description": "Whether a vector was produced as a query or as a stored document. Query and document vectors are never comparable across roles.",
+      "enum": ["query", "document"]
+    },
+    "AnnStrategy": {
+      "type": "string",
+      "description": "How the ANN index is built and searched. binary-full-rerank stores a binary sketch and reranks with the full vector.",
+      "enum": ["halfvec-exact", "halfvec-mrl", "binary-full-rerank"]
+    },
+    "DistanceMetric": {
+      "type": "string",
+      "enum": ["cosine", "l2", "inner-product"]
+    },
+    "Normalization": {
+      "type": "string",
+      "enum": ["none", "l2"]
+    },
+    "RegressionKind": {
+      "type": "string",
+      "description": "What a regression run found. decoupling means two entities that used to co-move no longer do.",
+      "enum": ["drift", "collapse", "decoupling", "saturation"]
+    },
+    "AlertSeverity": {
+      "type": "string",
+      "enum": ["info", "warning", "critical"]
+    },
+    "MatchOutcome": {
+      "type": "string",
+      "enum": ["accepted", "rejected", "deferred"]
+    },
+    "ComparisonSpace": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The twelve-field identity of a comparison space. Two vectors may only be compared when every one of these fields is equal.",
+      "x-ores-table": "embedding_comparison_spaces",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["tenantId", "entityKind", "entityId", "modelFamily", "modelName", "modelVersion", "dimsNative", "role", "normalization", "distanceMetric", "annStrategy", "generationProfile"]],
+      "x-ores-indexes": [["tenantId", "entityKind"]],
+      "required": ["id", "tenantId", "entityKind", "entityId", "modelFamily", "modelName", "modelVersion", "dimsNative", "role", "normalization", "distanceMetric", "annStrategy", "generationProfile", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "tenantId": { "type": "string", "format": "uuid" },
+        "entityKind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "modelFamily": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "modelName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "modelVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "dimsNative": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "role": { "$ref": "#/$defs/EmbeddingRole" },
+        "normalization": { "$ref": "#/$defs/Normalization" },
+        "distanceMetric": { "$ref": "#/$defs/DistanceMetric" },
+        "annStrategy": { "$ref": "#/$defs/AnnStrategy" },
+        "generationProfile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "EmbeddingRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One stored vector inside a comparison space. dims must equal the space dimsNative unless the strategy is halfvec-mrl.",
+      "x-ores-table": "embedding_records",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["spaceId", "entityId"]],
+      "x-ores-indexes": [["spaceId", "createdAt"]],
+      "required": ["id", "spaceId", "entityId", "vector", "dims", "checksum", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "vector": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 4100 },
+        "dims": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "checksum": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]+$" },
+        "sourceRevision": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "IndexRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A request to (re)index a bounded set of entities into one comparison space.",
+      "x-ores-table": "embedding_index_requests",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["idempotencyKey"]],
+      "x-ores-indexes": [["spaceId", "requestedAt"]],
+      "required": ["id", "spaceId", "entityIds", "priority", "idempotencyKey", "requestedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "entityIds": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 1000 },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 9 },
+        "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "requestedBy": { "type": "string", "format": "uuid" }
+      }
+    },
+    "SearchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A vector search inside one comparison space. lexicalPrefilter narrows candidates before the ANN probe.",
+      "x-ores-table": "embedding_search_requests",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["spaceId", "requestedAt"]],
+      "required": ["id", "spaceId", "queryVector", "topK", "requestedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "queryText": { "type": "string", "maxLength": 4000 },
+        "queryVector": { "type": "array", "items": { "type": "number" }, "minItems": 1, "maxItems": 4100 },
+        "lexicalPrefilter": { "type": "string", "maxLength": 400 },
+        "topK": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "minScore": { "type": "number", "minimum": -1, "maximum": 1 },
+        "requestedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SearchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The settled result of a SearchRequest. matchedEntityIds and scores are positionally aligned.",
+      "x-ores-table": "embedding_search_responses",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["requestId"]],
+      "x-ores-indexes": [["respondedAt"]],
+      "required": ["id", "requestId", "matchedEntityIds", "scores", "prefilterHits", "elapsedMillis", "truncated", "respondedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "requestId": { "type": "string", "format": "uuid", "x-ores-references": "SearchRequest.id" },
+        "matchedEntityIds": { "type": "array", "items": { "type": "string" }, "maxItems": 1000 },
+        "scores": { "type": "array", "items": { "type": "number" }, "maxItems": 1000 },
+        "prefilterHits": { "type": "integer", "minimum": 0 },
+        "elapsedMillis": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "respondedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "RegressionFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A statistical relationship detected between two entities in a space. coefficient is bounded to -1 through 1 and pValue to 0 through 1.",
+      "x-ores-table": "embedding_regression_findings",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["spaceId", "kind", "xEntity", "yEntity", "window", "detectedAt"]],
+      "x-ores-indexes": [["spaceId", "detectedAt"]],
+      "required": ["id", "spaceId", "kind", "xEntity", "yEntity", "coefficient", "pValue", "window", "sampleN", "detectedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "kind": { "$ref": "#/$defs/RegressionKind" },
+        "xEntity": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "yEntity": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "coefficient": { "type": "number", "minimum": -1, "maximum": 1 },
+        "pValue": { "type": "number", "minimum": 0, "maximum": 1 },
+        "window": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "sampleN": { "type": "integer", "minimum": 1 },
+        "detectedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "AlertRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A standing rule that turns regression findings into alerts. Thresholds are evaluated only inside one space.",
+      "x-ores-table": "embedding_alert_rules",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["spaceId", "name"]],
+      "x-ores-indexes": [["enabled", "severity"]],
+      "required": ["id", "spaceId", "name", "kind", "severity", "thresholdCoefficient", "maxPValue", "minSampleN", "enabled", "notifyChannels", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": { "$ref": "#/$defs/RegressionKind" },
+        "severity": { "$ref": "#/$defs/AlertSeverity" },
+        "thresholdCoefficient": { "type": "number", "minimum": -1, "maximum": 1 },
+        "maxPValue": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minSampleN": { "type": "integer", "minimum": 1 },
+        "enabled": { "type": "boolean" },
+        "notifyChannels": { "type": "array", "items": { "type": "string" }, "maxItems": 16 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "MatchEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A human or policy decision about one retrieved match. This is the supervision signal the regression jobs read.",
+      "x-ores-table": "embedding_match_events",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["spaceId", "occurredAt"], ["outcome"]],
+      "required": ["id", "spaceId", "queryEntityId", "matchedEntityId", "score", "outcome", "occurredAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "spaceId": { "type": "string", "format": "uuid", "x-ores-references": "ComparisonSpace.id" },
+        "queryEntityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "matchedEntityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "score": { "type": "number", "minimum": -1, "maximum": 1 },
+        "outcome": { "$ref": "#/$defs/MatchOutcome" },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "actorUserId": { "type": "string", "format": "uuid" }
+      }
+    }
+  }
+}

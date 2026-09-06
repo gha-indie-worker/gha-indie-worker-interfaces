@@ -1,0 +1,34 @@
+{
+  "name": "@gha-indie-worker/interfaces",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract authorities for GHA Indie Worker: TypeSpec and JSON Schema as independent peers, checked for parity by ores-contracts.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "contracts:check": "npx ores-contracts check",
+    "contracts:check:all": "node scripts/contracts-slices.mjs check",
+    "contracts:generate": "node scripts/contracts-slices.mjs generate",
+    "lint:typespec": "tsp compile contracts/typespec --no-emit",
+    "validate:fixtures": "node scripts/validate-fixtures.mjs",
+    "validate:fixtures:builtin": "node scripts/validate-fixtures.mjs --engine builtin",
+    "lint:js": "eslint --config .ores-lint/eslint.config.mjs scripts",
+    "lint:md": "markdownlint-cli2 --config .ores-lint/.markdownlint.jsonc \"**/*.md\" \"!node_modules\" \"!generated\"",
+    "lint": "npm run lint:js && npm run lint:md && npm run lint:typespec && npm run validate:fixtures:builtin && npm run validate:fixtures",
+    "test": "npm run validate:fixtures:builtin && npm run validate:fixtures && npm run contracts:check:all"
+  },
+  "devDependencies": {
+    "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts#main",
+    "@typespec/compiler": "^0.60.0",
+    "ajv": "^8.17.1",
+    "eslint": "^9.13.0",
+    "markdownlint-cli2": "^0.14.0"
+  }
+}

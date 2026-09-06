@@ -1,0 +1,7 @@
+{
+  "id": "00000018-1111-4222-8333-444455556666",
+  "runId": "00000015-1111-4222-8333-444455556666",
+  "reason": "user-requested",
+  "requestedAt": "2026-03-14T09:27:31Z",
+  "note": "superseded by a newer commit"
+}

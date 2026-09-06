@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/sync.schema.json",
+  "title": "GHA Indie Worker — sync",
+  "description": "Independently authored JSON Schema authority for the opto-sync causal envelope. Peer of contracts/typespec/sync.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Sync",
+  "x-ores-invariants": [
+    "vectorClock keys are node ids and values are non-negative monotonic counters",
+    "an envelope with conflictPolicy reject is never merged; the receiver returns a Problem with status 409"
+  ],
+  "$defs": {
+    "SyncOp": {
+      "type": "string",
+      "enum": ["upsert", "delete", "merge"]
+    },
+    "ConflictPolicy": {
+      "type": "string",
+      "description": "How a receiver settles a concurrent write. causal-merge requires the entity to have a registered merge function.",
+      "enum": ["last-write-wins", "causal-merge", "reject"]
+    },
+    "CausalEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One opto-sync causal envelope. vectorClock maps node id to a monotonic counter and is the only ordering authority.",
+      "x-ores-table": "sync_causal_envelopes",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["originNode", "originSequence"]],
+      "x-ores-indexes": [["entity", "entityId"], ["recordedAt"]],
+      "required": ["id", "entity", "entityId", "op", "vectorClock", "payload", "conflictPolicy", "originNode", "originSequence", "recordedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "entity": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "op": { "$ref": "#/$defs/SyncOp" },
+        "vectorClock": { "type": "object", "x-ores-json": true, "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "payload": { "type": "object", "x-ores-json": true },
+        "conflictPolicy": { "$ref": "#/$defs/ConflictPolicy" },
+        "originNode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "originSequence": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "appliedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SyncCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The high-water mark a node has durably applied for one entity family. Pull resumes from lastSequence.",
+      "x-ores-table": "sync_cursors",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["nodeId", "entity"]],
+      "x-ores-indexes": [["updatedAt"]],
+      "required": ["id", "nodeId", "entity", "lastSequence", "updatedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "nodeId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "entity": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "lastSequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

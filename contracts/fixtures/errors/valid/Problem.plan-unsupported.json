@@ -1,0 +1,11 @@
+{
+  "id": "0000005a-1111-4222-8333-444455556666",
+  "type": "https://indiebuild.dev/problems/plan-unsupported",
+  "title": "Workflow is outside the independent subset",
+  "status": 422,
+  "detail": "job build uses a dynamic matrix, which the independent lane never approximates",
+  "instance": "/v1/plans",
+  "code": "plan-unsupported",
+  "traceId": "0af7651916cd43dd8448eb211c80319c",
+  "occurredAt": "2026-03-14T09:26:53Z"
+}
