@@ -1,0 +1,56 @@
+name: Build log contract parity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0'
+
+      - name: Compare independent TypeSpec and JSON Schema authorities
+        uses: ORESoftware/typespec-json-schema-validator@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
+        with:
+          typespec: contracts/build-log.tsp
+          schema: contracts/build-log.schema.json
+          instances: contracts/instances
+          report: .typespec-json-schema-validator/report.json
+          contract_ir: .typespec-json-schema-validator/contract-ir.json
+          output_dir: .typespec-json-schema-validator/generated
+          quiet: 'false'
+
+      - name: Verify current checked-out inputs before consumption
+        uses: ORESoftware/typespec-json-schema-validator/actions/verify-contract-ir@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
+        with:
+          contract_ir: .typespec-json-schema-validator/contract-ir.json
+          report: .typespec-json-schema-validator/report.json
+          typespec: contracts/build-log.tsp
+          schema: contracts/build-log.schema.json
+          generated_schema: .typespec-json-schema-validator/generated/typespec.generated.schema.json
+          expected_declarations: '["GhaIndieWorker.BuildLogEvent","GhaIndieWorker.BuildLogMetadata","GhaIndieWorker.BuildLogStream"]'
+          verification: .typespec-json-schema-validator/consumer-verification.json
+
+      - name: Retain deterministic contract evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-contract-evidence
+          path: .typespec-json-schema-validator/
+          if-no-files-found: error
+
+  rust-interface:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
