@@ -5,9 +5,10 @@
 // against the human-authored Draft 2020-12 authority and executes both as
 // validators over deterministic probes.
 //
-// TJSV is pinned by Git commit instead of added to package.json so this change
-// does not hand-edit package-lock.json. Runner environments can override the
-// package spec with TJSV_PACKAGE for controlled upgrade testing.
+// TJSV is pinned to an immutable GitHub commit tarball instead of added to
+// package.json so this change does not hand-edit package-lock.json. The tarball
+// form deliberately avoids npm's GitFetcher path. Runner environments can
+// override the package spec with TJSV_PACKAGE for controlled upgrade testing.
 //
 //   node scripts/tjsv-slices.mjs [check|inventory] [--only slice,slice]
 //
@@ -45,7 +46,7 @@ if (unknown.length) {
 }
 
 const tjsvPackage = process.env.TJSV_PACKAGE
-  ?? 'github:ORESoftware/typespec-json-schema-validator#dfc28bfc000faba5a963f23c708171dfd5f8debf';
+  ?? 'https://github.com/ORESoftware/typespec-json-schema-validator/archive/dfc28bfc000faba5a963f23c708171dfd5f8debf.tar.gz';
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const reportDir = resolve(repoRoot, '.typespec-json-schema-validator', 'reports');
 mkdirSync(reportDir, { recursive: true });
