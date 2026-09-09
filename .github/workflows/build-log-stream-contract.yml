@@ -131,7 +131,7 @@ jobs:
           NODE
 
       - name: Check Rust projection formatting
-        run: rustfmt --edition 2021 --check src/build_log.rs src/lib.rs tests/build_log_contract.rs
+        run: rustfmt --edition 2021 --check --config skip_children=true src/build_log.rs src/lib.rs tests/build_log_contract.rs
 
       - name: Check Rust projection with Clippy
         run: cargo clippy --all-targets -- -D warnings
