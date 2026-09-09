@@ -1,0 +1,13 @@
+{
+  "name": "oversized-payload",
+  "frame": {
+    "protocol": "gha-indie-worker.log-sidecar.v1",
+    "magic": "GHLG",
+    "version": 1,
+    "streamId": 1,
+    "stream": "stdout",
+    "payloadLength": 65537
+  },
+  "payloadHex": "",
+  "wireHex": "47484c47010100010001"
+}
