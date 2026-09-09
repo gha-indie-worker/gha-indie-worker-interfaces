@@ -19,6 +19,9 @@ concurrency:
   group: build-log-stream-contract-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7.tar.gz
+
 jobs:
   peer-authority:
     runs-on: ubuntu-24.04
@@ -32,6 +35,11 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
+      - name: Set up Node 22 for TJSV
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
       - name: Prove exact revision
         shell: bash
         env:
@@ -41,17 +49,20 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Compare independent TypeSpec and JSON Schema authorities
-        uses: ORESoftware/typespec-json-schema-validator@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
-        with:
-          typespec: contracts/build-log-stream/main.tsp
-          schema: contracts/build-log-stream/authored.schema.json
-          instances: contracts/build-log-stream/instances
-          report: target/tjsv/positive/report.json
-          sarif: target/tjsv/positive/report.sarif
-          output_dir: target/tjsv/positive/generated-schema-b
-          max_probes: '128'
-          int64_strategy: number
-          seal_object_schemas: 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/tjsv/positive
+          npx --yes --package="$TJSV_PACKAGE" tjsv check \
+            --typespec=contracts/build-log-stream/main.tsp \
+            --schema=contracts/build-log-stream/authored.schema.json \
+            --instances=contracts/build-log-stream/instances \
+            --report=target/tjsv/positive/report.json \
+            --sarif=target/tjsv/positive/report.sarif \
+            --output-dir=target/tjsv/positive/generated-schema-b \
+            --max-probes=128 \
+            --int64-strategy=number \
+            --seal-object-schemas=true
 
       - name: Create one intentionally drifted peer schema
         shell: bash
@@ -71,29 +82,39 @@ jobs:
           target.write_text(json.dumps(document, indent=2) + '\n')
           PY
 
-      - name: Prove TJSV rejects peer-authority drift
-        id: drift
-        continue-on-error: true
-        uses: ORESoftware/typespec-json-schema-validator@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
-        with:
-          typespec: contracts/build-log-stream/main.tsp
-          schema: target/tjsv/drift/authored.schema.json
-          instances: contracts/build-log-stream/instances
-          report: target/tjsv/drift/report.json
-          sarif: target/tjsv/drift/report.sarif
-          output_dir: target/tjsv/drift/generated-schema-b
-          max_probes: '128'
-          int64_strategy: number
-          seal_object_schemas: 'true'
-
-      - name: Require the negative drift control to fail
-        if: always()
+      - name: Prove TJSV stops on peer-authority drift
         shell: bash
-        env:
-          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
         run: |
-          set -euo pipefail
-          test "$DRIFT_OUTCOME" = failure
+          set -uo pipefail
+          set +e
+          npx --yes --package="$TJSV_PACKAGE" tjsv check \
+            --typespec=contracts/build-log-stream/main.tsp \
+            --schema=target/tjsv/drift/authored.schema.json \
+            --instances=contracts/build-log-stream/instances \
+            --report=target/tjsv/drift/report.json \
+            --sarif=target/tjsv/drift/report.sarif \
+            --output-dir=target/tjsv/drift/generated-schema-b \
+            --max-probes=128 \
+            --int64-strategy=number \
+            --seal-object-schemas=true \
+            --quiet
+          status=$?
+          set -e
+          test "$status" -eq 2
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('target/tjsv/drift/report.json', 'utf8'));
+          if (report.status !== 'stopped_for_evaluation') {
+            throw new Error(`expected stopped_for_evaluation, got ${report.status}`);
+          }
+          const findings = Array.isArray(report.findings) ? report.findings : [];
+          if (!findings.some((finding) =>
+            String(finding.ruleId ?? finding.rule ?? '').includes('semantic-mismatch') ||
+            String(finding.message ?? '').includes('maxLength')
+          )) {
+            throw new Error('intentional maxLength drift was not attributable in TJSV findings');
+          }
+          NODE
 
       - name: Prove authored authorities were not rewritten
         shell: bash
