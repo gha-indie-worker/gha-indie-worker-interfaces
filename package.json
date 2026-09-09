@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Contract authorities for GHA Indie Worker: TypeSpec and JSON Schema as independent peers, checked for parity by ores-contracts.",
+  "description": "Independent TypeSpec and JSON Schema contract authorities for GHA Indie Worker, enforced by ores-contracts and TJSV.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,13 +16,15 @@
     "contracts:check": "npx ores-contracts check",
     "contracts:check:all": "node scripts/contracts-slices.mjs check",
     "contracts:generate": "node scripts/contracts-slices.mjs generate",
+    "contracts:tjsv": "node scripts/tjsv-slices.mjs check",
+    "contracts:tjsv:inventory": "node scripts/tjsv-slices.mjs inventory",
     "lint:typespec": "tsp compile contracts/typespec --no-emit",
     "validate:fixtures": "node scripts/validate-fixtures.mjs",
     "validate:fixtures:builtin": "node scripts/validate-fixtures.mjs --engine builtin",
     "lint:js": "eslint --config .ores-lint/eslint.config.mjs scripts",
     "lint:md": "markdownlint-cli2 --config .ores-lint/.markdownlint.jsonc \"**/*.md\" \"!node_modules\" \"!generated\"",
-    "lint": "npm run lint:js && npm run lint:md && npm run lint:typespec && npm run validate:fixtures:builtin && npm run validate:fixtures",
-    "test": "npm run validate:fixtures:builtin && npm run validate:fixtures && npm run contracts:check:all"
+    "lint": "npm run lint:js && npm run lint:md && npm run lint:typespec && npm run validate:fixtures:builtin && npm run validate:fixtures && npm run contracts:tjsv",
+    "test": "npm run validate:fixtures:builtin && npm run validate:fixtures && npm run contracts:check:all && npm run contracts:tjsv"
   },
   "devDependencies": {
     "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts#main",
