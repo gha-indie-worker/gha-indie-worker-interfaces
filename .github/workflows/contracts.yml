@@ -29,7 +29,7 @@ jobs:
         run: npm run lint:typespec
       - name: TypeSpec + JSON Schema projection parity, every slice
         run: node scripts/contracts-slices.mjs check
-      - name: TypeSpec + JSON Schema semantic parity, every slice (TJSV)
+      - name: TypeSpec + JSON Schema semantic parity, recorded corpus, and Contract IR (TJSV)
         run: npm run contracts:tjsv
       - name: generated/ is up to date (run `npm run contracts:generate` and commit)
         run: node scripts/contracts-slices.mjs generate && git diff --exit-code -- generated
@@ -42,8 +42,12 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: tjsv-parity-receipts
-          path: .typespec-json-schema-validator/reports/*.json
+          name: tjsv-language-boundary-evidence
+          path: |
+            .typespec-json-schema-validator/reports/*.json
+            .typespec-json-schema-validator/contract-ir/*.json
+            .typespec-json-schema-validator/generated/**/*.json
+            .typespec-json-schema-validator/mappings/*.json
           if-no-files-found: ignore
 
   fixtures:
