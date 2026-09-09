@@ -126,10 +126,10 @@ mod tests {
     #[test]
     fn rejects_unknown_cross_runtime_fields() {
         let mut value = serde_json::to_value(chunk()).expect("serialize");
-        value
-            .as_object_mut()
-            .expect("metadata object")
-            .insert("accessToken".to_string(), serde_json::json!("must-not-cross"));
+        value.as_object_mut().expect("metadata object").insert(
+            "accessToken".to_string(),
+            serde_json::json!("must-not-cross"),
+        );
         assert_eq!(
             BuildLogMetadata::parse_json_line(&value.to_string()),
             Err(InterfaceError::SchemaMismatch)
