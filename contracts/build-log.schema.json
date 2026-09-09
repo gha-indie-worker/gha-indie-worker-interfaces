@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://indiebuild.dev/contracts/gha-indie-worker/build-log-metadata-v1.schema.json",
+  "$ref": "#/$defs/BuildLogMetadata",
+  "$defs": {
+    "BuildLogStream": {
+      "type": "string",
+      "enum": ["stdout", "stderr", "worker"]
+    },
+    "BuildLogEvent": {
+      "type": "string",
+      "enum": ["chunk", "dropped", "receiver_closed", "stream_closed"]
+    },
+    "BuildLogMetadata": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": [
+        "schemaVersion",
+        "event",
+        "jobId",
+        "stream",
+        "sequence",
+        "byteLength",
+        "timestamp"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "gha-indie-worker.build-log-metadata/v1"
+        },
+        "event": {
+          "$ref": "#/$defs/BuildLogEvent"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/$defs/BuildLogStream"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "githubOrganization": {
+          "type": "string"
+        },
+        "workflow": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "jobName": {
+          "type": "string"
+        },
+        "stepName": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "traceId": {
+          "type": "string"
+        },
+        "spanId": {
+          "type": "string"
+        },
+        "droppedChunks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "droppedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    }
+  }
+}

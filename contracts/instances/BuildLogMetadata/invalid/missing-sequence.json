@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "gha-indie-worker.build-log-metadata/v1",
+  "event": "chunk",
+  "jobId": "build-42",
+  "stream": "stdout",
+  "byteLength": 5,
+  "timestamp": "2026-09-09T19:45:05Z"
+}
