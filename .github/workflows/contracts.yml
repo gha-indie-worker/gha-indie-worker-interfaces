@@ -27,8 +27,10 @@ jobs:
       - run: npm ci
       - name: TypeSpec compiles
         run: npm run lint:typespec
-      - name: TypeSpec + JSON Schema parity, every slice
+      - name: TypeSpec + JSON Schema projection parity, every slice
         run: node scripts/contracts-slices.mjs check
+      - name: TypeSpec + JSON Schema semantic parity, every slice (TJSV)
+        run: npm run contracts:tjsv
       - name: generated/ is up to date (run `npm run contracts:generate` and commit)
         run: node scripts/contracts-slices.mjs generate && git diff --exit-code -- generated
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -36,6 +38,12 @@ jobs:
         with:
           name: ores-contracts-receipts
           path: target/ores-contracts/*/receipt.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: tjsv-parity-receipts
+          path: .typespec-json-schema-validator/reports/*.json
           if-no-files-found: ignore
 
   fixtures:
