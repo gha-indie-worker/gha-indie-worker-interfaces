@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "gha-indie-worker.log-sidecar.v1",
+  "event": "command_wait_failed",
+  "atMs": 1788985500200,
+  "jobId": "build-1788985500000-1",
+  "program": "git",
+  "success": false,
+  "exitCode": null,
+  "droppedFrames": -1,
+  "droppedBytes": 0
+}
