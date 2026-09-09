@@ -1,0 +1,20 @@
+{
+  "identity": {
+    "organization": "gha-indie-worker",
+    "repository": "gha-indie-worker.rs",
+    "workflow": "ci",
+    "runId": "34370340357",
+    "runAttempt": 1,
+    "jobId": "102529644401",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "gitRef": "refs/heads/main"
+  },
+  "firstSequence": 100,
+  "lastSequence": 149,
+  "byteCount": 32768,
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "compression": "zstd",
+  "objectRef": "r2://gha-indie-worker-build-logs/gha-indie-worker/gha-indie-worker.rs/34370340357/1/102529644401/000100-000149.zst",
+  "hotStoreRef": "loki://gha-indie-worker/gha-indie-worker.rs/34370340357/102529644401",
+  "storedAt": "2026-09-09T19:31:00Z"
+}
