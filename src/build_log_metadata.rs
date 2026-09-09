@@ -134,10 +134,19 @@ mod tests {
             "droppedChunks",
             "droppedBytes",
         ] {
-            assert!(!object.contains_key(key), "optional field {key} must be omitted");
+            assert!(
+                !object.contains_key(key),
+                "optional field {key} must be omitted"
+            );
         }
-        assert_eq!(object.get("repository").and_then(|value| value.as_str()), Some("gha-indie-worker/gha-indie-worker.rs"));
-        assert_eq!(object.get("attempt").and_then(|value| value.as_u64()), Some(1));
+        assert_eq!(
+            object.get("repository").and_then(|value| value.as_str()),
+            Some("gha-indie-worker/gha-indie-worker.rs")
+        );
+        assert_eq!(
+            object.get("attempt").and_then(|value| value.as_u64()),
+            Some(1)
+        );
         assert!(object.values().all(|value| !value.is_null()));
     }
 
