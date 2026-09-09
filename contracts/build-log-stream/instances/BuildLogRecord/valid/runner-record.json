@@ -1,0 +1,21 @@
+{
+  "identity": {
+    "organization": "gha-indie-worker",
+    "repository": "gha-indie-worker.rs",
+    "workflow": "ci",
+    "runId": "34370340357",
+    "runAttempt": 1,
+    "jobId": "102529644401",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "gitRef": "refs/heads/agent/den-3440-build-log-stream-contract",
+    "stepName": "cargo test",
+    "runnerName": "self-hosted-linux-x64-01"
+  },
+  "stream": "stdout",
+  "source": "runner",
+  "sequence": 42,
+  "offsetBytes": 8192,
+  "body": "test result: ok. 61 passed; 0 failed",
+  "observedAt": "2026-09-09T19:30:00Z",
+  "redacted": true
+}
