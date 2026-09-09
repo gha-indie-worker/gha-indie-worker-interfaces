@@ -136,11 +136,20 @@ mod tests {
             "droppedChunks",
             "droppedBytes",
         ] {
-            assert!(!object.contains_key(field), "absent optional field leaked: {field}");
+            assert!(
+                !object.contains_key(field),
+                "absent optional field leaked: {field}"
+            );
         }
 
-        assert_eq!(object.get("repository").and_then(|v| v.as_str()), Some("gha-indie-worker/gha-indie-worker.rs"));
-        assert_eq!(object.get("githubOrganization").and_then(|v| v.as_str()), Some("gha-indie-worker"));
+        assert_eq!(
+            object.get("repository").and_then(|v| v.as_str()),
+            Some("gha-indie-worker/gha-indie-worker.rs")
+        );
+        assert_eq!(
+            object.get("githubOrganization").and_then(|v| v.as_str()),
+            Some("gha-indie-worker")
+        );
         assert_eq!(object.get("attempt").and_then(|v| v.as_u64()), Some(1));
         assert!(object.values().all(|value| !value.is_null()));
     }
