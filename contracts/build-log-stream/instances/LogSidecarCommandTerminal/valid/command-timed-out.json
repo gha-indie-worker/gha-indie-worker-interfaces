@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "gha-indie-worker.log-sidecar.v1",
+  "event": "command_timed_out",
+  "atMs": 1788985508000,
+  "jobId": null,
+  "program": "nerdctl",
+  "success": false,
+  "exitCode": null,
+  "droppedFrames": 4,
+  "droppedBytes": 65536
+}
