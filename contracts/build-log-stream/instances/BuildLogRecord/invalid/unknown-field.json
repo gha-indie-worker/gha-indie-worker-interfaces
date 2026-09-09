@@ -1,0 +1,20 @@
+{
+  "identity": {
+    "organization": "gha-indie-worker",
+    "repository": "gha-indie-worker.rs",
+    "workflow": "ci",
+    "runId": "34370340357",
+    "runAttempt": 1,
+    "jobId": "102529644401",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "gitRef": "refs/heads/main"
+  },
+  "stream": "stdout",
+  "source": "runner",
+  "sequence": 0,
+  "offsetBytes": 0,
+  "body": "hello",
+  "observedAt": "2026-09-09T19:30:00Z",
+  "redacted": true,
+  "authorization": "must-never-be-admitted"
+}
