@@ -4,11 +4,17 @@ on:
   pull_request:
     paths:
       - 'contracts/build-log-stream/**'
+      - 'src/build_log.rs'
+      - 'src/lib.rs'
+      - 'tests/build_log_contract.rs'
       - '.github/workflows/build-log-stream-contract.yml'
   push:
     branches: [main]
     paths:
       - 'contracts/build-log-stream/**'
+      - 'src/build_log.rs'
+      - 'src/lib.rs'
+      - 'tests/build_log_contract.rs'
       - '.github/workflows/build-log-stream-contract.yml'
   workflow_dispatch:
 
@@ -20,12 +26,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7.tar.gz
+  TJSV_REVISION: a4b731fbf82c4d162abd74fd03758fa32bb76176
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/a4b731fbf82c4d162abd74fd03758fa32bb76176.tar.gz
 
 jobs:
   peer-authority:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out exact revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +46,12 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+
+      - name: Set up Rust 1.90
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.90.0'
+          components: rustfmt, clippy
 
       - name: Prove exact revision
         shell: bash
@@ -60,29 +73,29 @@ jobs:
             --report=target/tjsv/positive/report.json \
             --sarif=target/tjsv/positive/report.sarif \
             --output-dir=target/tjsv/positive/generated-schema-b \
-            --max-probes=128 \
+            --max-probes=256 \
             --int64-strategy=number \
             --seal-object-schemas=true
 
-      - name: Create one intentionally drifted peer schema
+      - name: Create one intentionally drifted sidecar peer schema
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p target/tjsv/drift
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const source = 'contracts/build-log-stream/authored.schema.json';
+          const target = 'target/tjsv/drift/authored.schema.json';
+          const document = JSON.parse(fs.readFileSync(source, 'utf8'));
+          const protocol = document.$defs.LogSidecarProtocol.enum;
+          if (protocol.length !== 1 || protocol[0] !== 'gha-indie-worker.log-sidecar.v1') {
+            throw new Error('unexpected sidecar protocol authority');
+          }
+          protocol[0] = 'gha-indie-worker.log-sidecar.v2';
+          fs.writeFileSync(target, JSON.stringify(document, null, 2) + '\n');
+          NODE
 
-          source = Path('contracts/build-log-stream/authored.schema.json')
-          target = Path('target/tjsv/drift/authored.schema.json')
-          document = json.loads(source.read_text())
-          body = document['$defs']['BuildLogRecord']['properties']['body']
-          assert body['maxLength'] == 65536
-          body['maxLength'] = 65535
-          target.write_text(json.dumps(document, indent=2) + '\n')
-          PY
-
-      - name: Prove TJSV stops on peer-authority drift
+      - name: Prove TJSV stops on live-sidecar authority drift
         shell: bash
         run: |
           set -uo pipefail
@@ -94,7 +107,7 @@ jobs:
             --report=target/tjsv/drift/report.json \
             --sarif=target/tjsv/drift/report.sarif \
             --output-dir=target/tjsv/drift/generated-schema-b \
-            --max-probes=128 \
+            --max-probes=256 \
             --int64-strategy=number \
             --seal-object-schemas=true \
             --quiet
@@ -110,11 +123,21 @@ jobs:
           const findings = Array.isArray(report.findings) ? report.findings : [];
           if (!findings.some((finding) =>
             String(finding.ruleId ?? finding.rule ?? '').includes('semantic-mismatch') ||
-            String(finding.message ?? '').includes('maxLength')
+            String(finding.message ?? '').includes('LogSidecarProtocol') ||
+            String(finding.message ?? '').includes('log-sidecar')
           )) {
-            throw new Error('intentional maxLength drift was not attributable in TJSV findings');
+            throw new Error('intentional sidecar protocol drift was not attributable in TJSV findings');
           }
           NODE
+
+      - name: Check Rust projection formatting
+        run: rustfmt --edition 2021 --check --config skip_children=true src/build_log.rs src/lib.rs tests/build_log_contract.rs
+
+      - name: Check Rust projection with Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test Rust projection and exact wire vectors
+        run: cargo test --all-targets
 
       - name: Prove authored authorities were not rewritten
         shell: bash

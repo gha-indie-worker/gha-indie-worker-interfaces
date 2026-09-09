@@ -86,6 +86,6 @@ jobs:
           toolchain: '1.90.0'
           components: rustfmt, clippy
       - name: Check only the Rust interface files changed by this contract PR
-        run: rustfmt --edition 2021 --config skip_children=true --check src/build_log.rs src/lib.rs
+        run: rustfmt --edition 2021 --config skip_children=true --check src/build_log_metadata.rs src/lib.rs
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
