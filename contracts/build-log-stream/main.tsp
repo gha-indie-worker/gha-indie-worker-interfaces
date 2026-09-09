@@ -33,6 +33,30 @@ scalar GitRef extends string;
 @maxLength(2048)
 scalar StorageRef extends string;
 
+@minValue(0)
+@maxValue(9007199254740991)
+scalar SafeUnsignedInteger extends integer;
+
+@minValue(-2147483648)
+@maxValue(2147483647)
+scalar ProcessExitCode extends integer;
+
+@minLength(1)
+@maxLength(255)
+scalar LogSidecarJobId extends string;
+
+@minLength(1)
+@maxLength(255)
+scalar LogSidecarProgram extends string;
+
+@maxLength(131072)
+@pattern("^[0-9a-f]*$")
+scalar PayloadHex extends string;
+
+@maxLength(131092)
+@pattern("^[0-9a-f]*$")
+scalar WireHex extends string;
+
 enum BuildLogStream {
   Stdout: "stdout",
   Stderr: "stderr",
@@ -48,6 +72,79 @@ enum BuildLogCompression {
   None: "none",
   Gzip: "gzip",
   Zstd: "zstd",
+}
+
+enum LogSidecarProtocol {
+  V1: "gha-indie-worker.log-sidecar.v1",
+}
+
+enum LogSidecarFrameMagic {
+  GHLG: "GHLG",
+}
+
+enum LogSidecarFrameStream {
+  Stdout: "stdout",
+  Stderr: "stderr",
+}
+
+enum LogSidecarStartEvent {
+  CommandStarted: "command_started",
+}
+
+enum LogSidecarTerminalEvent {
+  CommandFinished: "command_finished",
+  CommandTimedOut: "command_timed_out",
+  CommandWaitFailed: "command_wait_failed",
+}
+
+model LogSidecarFrameDescriptor {
+  protocol: LogSidecarProtocol;
+  magic: LogSidecarFrameMagic;
+
+  @minValue(1)
+  @maxValue(1)
+  version: integer;
+
+  @minValue(1)
+  @maxValue(2)
+  streamId: integer;
+
+  stream: LogSidecarFrameStream;
+
+  @minValue(0)
+  @maxValue(65536)
+  payloadLength: integer;
+}
+
+model LogSidecarWireVector {
+  @minLength(1)
+  @maxLength(64)
+  @pattern("^[A-Za-z0-9_.-]+$")
+  name: string;
+
+  frame: LogSidecarFrameDescriptor;
+  payloadHex: PayloadHex;
+  wireHex: WireHex;
+}
+
+model LogSidecarCommandStarted {
+  schemaVersion: LogSidecarProtocol;
+  event: LogSidecarStartEvent;
+  atMs: SafeUnsignedInteger;
+  jobId: LogSidecarJobId | null;
+  program: LogSidecarProgram;
+}
+
+model LogSidecarCommandTerminal {
+  schemaVersion: LogSidecarProtocol;
+  event: LogSidecarTerminalEvent;
+  atMs: SafeUnsignedInteger;
+  jobId: LogSidecarJobId | null;
+  program: LogSidecarProgram;
+  success: boolean;
+  exitCode: ProcessExitCode | null;
+  droppedFrames: SafeUnsignedInteger;
+  droppedBytes: SafeUnsignedInteger;
 }
 
 model BuildLogIdentity {
