@@ -27,7 +27,7 @@ pub enum BuildLogStream {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildLogMetadata {
     pub schema_version: String,
     pub event: BuildLogEvent,
@@ -51,13 +51,15 @@ pub struct BuildLogMetadata {
 
 impl BuildLogMetadata {
     pub fn validate(self) -> Result<Self, InterfaceError> {
-        if self.schema_version != BUILD_LOG_METADATA_SCHEMA_VERSION || self.job_id.trim().is_empty() {
+        if self.schema_version != BUILD_LOG_METADATA_SCHEMA_VERSION || self.job_id.trim().is_empty()
+        {
             return Err(InterfaceError::SchemaMismatch);
         }
         match self.event {
             BuildLogEvent::Chunk if self.byte_length == 0 => Err(InterfaceError::SchemaMismatch),
             BuildLogEvent::Dropped
-                if self.dropped_chunks.unwrap_or(0) == 0 && self.dropped_bytes.unwrap_or(0) == 0 =>
+                if self.dropped_chunks.unwrap_or(0) == 0
+                    && self.dropped_bytes.unwrap_or(0) == 0 =>
             {
                 Err(InterfaceError::SchemaMismatch)
             }
@@ -66,7 +68,8 @@ impl BuildLogMetadata {
     }
 
     pub fn parse_json_line(line: &str) -> Result<Self, InterfaceError> {
-        let value = serde_json::from_str::<Self>(line).map_err(|_| InterfaceError::SchemaMismatch)?;
+        let value =
+            serde_json::from_str::<Self>(line).map_err(|_| InterfaceError::SchemaMismatch)?;
         value.validate()
     }
 }
@@ -118,5 +121,18 @@ mod tests {
         dropped.dropped_chunks = Some(0);
         dropped.dropped_bytes = Some(0);
         assert_eq!(dropped.validate(), Err(InterfaceError::SchemaMismatch));
+    }
+
+    #[test]
+    fn rejects_unknown_cross_runtime_fields() {
+        let mut value = serde_json::to_value(chunk()).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("metadata object")
+            .insert("accessToken".to_string(), serde_json::json!("must-not-cross"));
+        assert_eq!(
+            BuildLogMetadata::parse_json_line(&value.to_string()),
+            Err(InterfaceError::SchemaMismatch)
+        );
     }
 }
