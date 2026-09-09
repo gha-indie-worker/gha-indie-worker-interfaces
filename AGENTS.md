@@ -13,7 +13,7 @@ When this file and the parent disagree: follow this file for this repository's l
 Canonical `interfaces` repository for [`gha-indie-worker`](https://github.com/gha-indie-worker).
 
 - Internal runtimes: Rust, TypeScript, Dart.
-- Contracts: JSON Schema in `gha-indie-worker-interfaces`.
+- Contracts: independent TypeSpec and JSON Schema Draft 2020-12 authorities in `gha-indie-worker-interfaces`.
 - Auth: github.com/shared-auth.
 - Sync: github.com/opto-sync.
 - Telemetry: github.com/ores-otel.
@@ -30,32 +30,38 @@ remember to modularize the rust, typescript and dart - not everything belongs in
 
 Functional programming is mostly the following:
 
-+ explicit inputs
-+ explicit outputs
-+ immutable values
-+ pure transformations
-+ typed errors
-+ explicit state transitions
-+ composition
-+ effects pushed outward
-+ illegal states excluded by types
+- explicit inputs
+- explicit outputs
+- immutable values
+- pure transformations
+- typed errors
+- explicit state transitions
+- composition
+- effects pushed outward
+- illegal states excluded by types
 
-## Contracts protocol (ores-contracts)
+## Contracts protocol (ores-contracts + TJSV)
 
 **TypeSpec and JSON Schema are independent, human-authored, top-level
 authorities. Neither is generated from the other.** This is the single most
 important rule in this repository:
 
-* never write a `.tsp` by running a converter over a `.schema.json`, or the
+- never write a `.tsp` by running a converter over a `.schema.json`, or the
   reverse — `ores-contracts bootstrap` exists only to *draft* a new authority,
   and its output must be reviewed and re-authored before it counts;
-* never hand-edit `generated/**` — change an authority instead;
-* never resolve a parity finding by editing whichever authority is "wrong". A
+- never hand-edit `generated/**` — change an authority instead;
+- never resolve a parity finding by editing whichever authority is "wrong". A
   finding means the two documents disagree about meaning: decide what the
   contract should say, then change both deliberately;
-* a new field is three edits — the `.tsp`, the `.schema.json` and `src/v1/` — plus
+- a new field is three edits — the `.tsp`, the `.schema.json` and `src/v1/` — plus
   at least one fixture. `tests/fixtures_roundtrip.rs` fails if a model exists in
-  the JSON Schema authority with no Rust mirror.
+  the JSON Schema authority with no Rust mirror;
+- run both parity gates for contract changes: `npm run contracts:check:all` for
+  independent parse/projection parity and `npm run contracts:tjsv` for official
+  TypeSpec-emitter witness comparison plus differential validator behavior;
+- treat TJSV-generated schemas and receipts as evidence only. They never become
+  an authored authority and never overwrite `contracts/typespec/**` or
+  `contracts/json-schema/**`.
 
 The parity IR is persistence-shaped, so every model carries a table name and a
 primary key, tagged unions are a sealed object plus a `kind` discriminator, and
