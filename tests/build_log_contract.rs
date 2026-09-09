@@ -90,8 +90,7 @@ fn rust_constants_match_the_independent_draft_2020_12_authority() {
         Some(LOG_SIDECAR_PROTOCOL)
     );
     assert_eq!(
-        defs["LogSidecarFrameDescriptor"]["properties"]["payloadLength"]["maximum"]
-            .as_u64(),
+        defs["LogSidecarFrameDescriptor"]["properties"]["payloadLength"]["maximum"].as_u64(),
         Some(LOG_SIDECAR_MAX_PAYLOAD_BYTES as u64)
     );
     assert_eq!(
