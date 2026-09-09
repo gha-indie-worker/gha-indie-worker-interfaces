@@ -1,0 +1,109 @@
+name: build-log-stream-contract
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/build-log-stream/**'
+      - '.github/workflows/build-log-stream-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/build-log-stream/**'
+      - '.github/workflows/build-log-stream-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-log-stream-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  peer-authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Prove exact revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Compare independent TypeSpec and JSON Schema authorities
+        uses: ORESoftware/typespec-json-schema-validator@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
+        with:
+          typespec: contracts/build-log-stream/main.tsp
+          schema: contracts/build-log-stream/authored.schema.json
+          instances: contracts/build-log-stream/instances
+          report: target/tjsv/positive/report.json
+          sarif: target/tjsv/positive/report.sarif
+          output_dir: target/tjsv/positive/generated-schema-b
+          max_probes: '128'
+          int64_strategy: number
+          seal_object_schemas: 'true'
+
+      - name: Create one intentionally drifted peer schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/tjsv/drift
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = Path('contracts/build-log-stream/authored.schema.json')
+          target = Path('target/tjsv/drift/authored.schema.json')
+          document = json.loads(source.read_text())
+          body = document['$defs']['BuildLogRecord']['properties']['body']
+          assert body['maxLength'] == 65536
+          body['maxLength'] = 65535
+          target.write_text(json.dumps(document, indent=2) + '\n')
+          PY
+
+      - name: Prove TJSV rejects peer-authority drift
+        id: drift
+        continue-on-error: true
+        uses: ORESoftware/typespec-json-schema-validator@e609e1973fcdcfaeecbdfa2dcbfde75c55286ff7
+        with:
+          typespec: contracts/build-log-stream/main.tsp
+          schema: target/tjsv/drift/authored.schema.json
+          instances: contracts/build-log-stream/instances
+          report: target/tjsv/drift/report.json
+          sarif: target/tjsv/drift/report.sarif
+          output_dir: target/tjsv/drift/generated-schema-b
+          max_probes: '128'
+          int64_strategy: number
+          seal_object_schemas: 'true'
+
+      - name: Require the negative drift control to fail
+        if: always()
+        shell: bash
+        env:
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+        run: |
+          set -euo pipefail
+          test "$DRIFT_OUTCOME" = failure
+
+      - name: Prove authored authorities were not rewritten
+        shell: bash
+        run: git diff --exit-code -- contracts/build-log-stream
+
+      - name: Upload deterministic parity evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-log-stream-tjsv-${{ github.sha }}
+          path: target/tjsv/
+          if-no-files-found: error
+          retention-days: 30
