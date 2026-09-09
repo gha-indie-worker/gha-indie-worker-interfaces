@@ -36,16 +36,27 @@ pub struct BuildLogMetadata {
     pub sequence: u32,
     pub byte_length: u32,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub github_organization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub job_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub step_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped_chunks: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped_bytes: Option<u32>,
 }
 
@@ -106,7 +117,32 @@ mod tests {
         let line = serde_json::to_string(&chunk()).expect("serialize");
         assert!(line.contains("\"schemaVersion\""));
         assert!(line.contains("\"stdout\""));
+        assert!(!line.contains(":null"));
         assert_eq!(BuildLogMetadata::parse_json_line(&line), Ok(chunk()));
+    }
+
+    #[test]
+    fn serialization_omits_absent_optional_properties() {
+        let value = serde_json::to_value(chunk()).expect("serialize");
+        let object = value.as_object().expect("metadata object");
+
+        for field in [
+            "workflow",
+            "runId",
+            "jobName",
+            "stepName",
+            "traceId",
+            "spanId",
+            "droppedChunks",
+            "droppedBytes",
+        ] {
+            assert!(!object.contains_key(field), "absent optional field leaked: {field}");
+        }
+
+        assert_eq!(object.get("repository").and_then(|v| v.as_str()), Some("gha-indie-worker/gha-indie-worker.rs"));
+        assert_eq!(object.get("githubOrganization").and_then(|v| v.as_str()), Some("gha-indie-worker"));
+        assert_eq!(object.get("attempt").and_then(|v| v.as_u64()), Some(1));
+        assert!(object.values().all(|value| !value.is_null()));
     }
 
     #[test]
