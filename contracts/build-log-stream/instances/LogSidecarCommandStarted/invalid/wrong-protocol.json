@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "gha-indie-worker.log-sidecar.v2",
+  "event": "command_started",
+  "atMs": 1788985500000,
+  "jobId": "build-1788985500000-1",
+  "program": "cargo"
+}
