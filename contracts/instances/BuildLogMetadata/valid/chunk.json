@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "gha-indie-worker.build-log-metadata/v1",
+  "event": "chunk",
+  "jobId": "build-1788983100000-42",
+  "stream": "stdout",
+  "sequence": 7,
+  "byteLength": 18,
+  "timestamp": "2026-09-09T19:45:00Z",
+  "repository": "gha-indie-worker/gha-indie-worker.rs",
+  "githubOrganization": "gha-indie-worker",
+  "workflow": "ci",
+  "runId": "33804125757",
+  "jobName": "linux-build",
+  "stepName": "cargo test",
+  "attempt": 1
+}

@@ -1,0 +1,19 @@
+{
+  "identity": {
+    "organization": "gha-indie-worker",
+    "repository": "gha-indie-worker.rs",
+    "workflow": "ci",
+    "runId": "34370340357",
+    "runAttempt": 1,
+    "jobId": "102529644401",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "gitRef": "refs/heads/main"
+  },
+  "firstSequence": 100,
+  "lastSequence": 149,
+  "byteCount": 32768,
+  "sha256": "not-a-sha256",
+  "compression": "zstd",
+  "objectRef": "r2://gha-indie-worker-build-logs/chunk.zst",
+  "storedAt": "2026-09-09T19:31:00Z"
+}

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "gha-indie-worker.build-log-metadata/v1",
+  "event": "stream_closed",
+  "jobId": "worker-global",
+  "stream": "stdout",
+  "sequence": 13,
+  "byteLength": 0,
+  "timestamp": "2026-09-09T19:45:02Z"
+}
