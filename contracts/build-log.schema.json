@@ -13,7 +13,7 @@
     },
     "BuildLogMetadata": {
       "type": "object",
-      "additionalProperties": false,
+      "unevaluatedProperties": false,
       "required": [
         "schemaVersion",
         "event",
@@ -25,6 +25,7 @@
       ],
       "properties": {
         "schemaVersion": {
+          "type": "string",
           "const": "gha-indie-worker.build-log-metadata/v1"
         },
         "event": {
