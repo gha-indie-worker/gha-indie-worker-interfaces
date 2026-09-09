@@ -73,6 +73,7 @@ jobs:
           name: build-log-contract-evidence
           path: .typespec-json-schema-validator/
           if-no-files-found: error
+          include-hidden-files: true
 
   rust-interface:
     runs-on: ubuntu-latest
