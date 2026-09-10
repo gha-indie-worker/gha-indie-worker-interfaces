@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://indiebuild.dev/contracts/gha-indie-worker/indiebuild-v1.schema.json",
+  "$ref": "#/$defs/IndieBuildConfig",
+  "$defs": {
+    "IndieBuildRepositoryRole": {
+      "type": "string",
+      "enum": ["client", "server", "mixed"]
+    },
+    "IndieBuildTargetRole": {
+      "type": "string",
+      "enum": ["client", "server"]
+    },
+    "IndieBuildPlatform": {
+      "type": "string",
+      "enum": ["linux", "macos", "windows"]
+    },
+    "IndieBuildTarget": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": [
+        "name",
+        "role",
+        "path",
+        "profile",
+        "platform",
+        "artifacts",
+        "cache_paths",
+        "env",
+        "secret_env",
+        "allow_network",
+        "allow_push",
+        "allow_deploy",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "$ref": "#/$defs/IndieBuildTargetRole" },
+        "path": { "type": "string" },
+        "profile": { "type": "string" },
+        "platform": { "$ref": "#/$defs/IndieBuildPlatform" },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "cache_paths": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "array", "items": { "type": "string" } },
+        "secret_env": { "type": "array", "items": { "type": "string" } },
+        "allow_network": { "type": "boolean" },
+        "allow_push": { "type": "boolean" },
+        "allow_deploy": { "type": "boolean" },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "IndieBuildConfig": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["schema_version", "repository_role", "default_target", "targets"],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "gha-indie-worker.indiebuild/v1"
+        },
+        "repository_role": { "$ref": "#/$defs/IndieBuildRepositoryRole" },
+        "default_target": { "type": "string" },
+        "targets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/IndieBuildTarget" }
+        }
+      }
+    }
+  }
+}
