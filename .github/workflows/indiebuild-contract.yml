@@ -46,7 +46,7 @@ jobs:
           node .tjsv/bin/typespec-json-schema-validator.mjs check \
             --typespec=contracts/indiebuild.tsp \
             --schema=contracts/indiebuild.schema.json \
-            --instances=contracts/instances/IndieBuildConfig \
+            --instances=contracts/indiebuild-instances \
             --report=.typespec-json-schema-validator/indiebuild-report.json \
             --sarif=.typespec-json-schema-validator/indiebuild-report.sarif \
             --contract-ir=.typespec-json-schema-validator/indiebuild-contract-ir.json \
