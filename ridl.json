@@ -1,0 +1,15 @@
+{
+  "maps": [
+    "route-maps/worker.route-map.json",
+    "route-maps/clone.route-map.json",
+    "route-maps/executor-router.route-map.json"
+  ],
+  "identical_to": [
+    "../gha-indie-worker-lib-core/route-maps/worker.route-map.json",
+    "../gha-indie-worker-lib-core/route-maps/clone.route-map.json",
+    "../gha-indie-worker-lib-core/route-maps/executor-router.route-map.json"
+  ],
+  "out": "generated",
+  "skip_source": true,
+  "skip_drift": true
+}
