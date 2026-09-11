@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/runs.schema.json",
+  "title": "GHA Indie Worker — runs",
+  "description": "Independently authored JSON Schema authority for plans, runs, jobs, steps, log chunks and cancellation. Peer of contracts/typespec/runs.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Runs",
+  "x-ores-transitions": {
+    "$comment": "Runtime-only annotation mirrored by gha-indie-worker-lib-core::run lifecycle checks.",
+    "runStatus": {
+      "queued": ["planning", "cancelled"],
+      "planning": ["running", "failed", "cancelled"],
+      "running": ["succeeded", "failed", "cancelled"],
+      "succeeded": [],
+      "failed": [],
+      "cancelled": []
+    }
+  },
+  "$defs": {
+    "RunStatus": {
+      "type": "string",
+      "description": "Lifecycle of a run and of every job inside it. queued and planning are pre-execution states.",
+      "enum": ["queued", "planning", "running", "succeeded", "failed", "cancelled"]
+    },
+    "StepConclusion": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "skipped", "cancelled"]
+    },
+    "ParityLane": {
+      "type": "string",
+      "description": "Which continuity lane executed the work. arc is native GitHub parity, independent is this fleet's compiler.",
+      "enum": ["arc", "independent"]
+    },
+    "CancellationReason": {
+      "type": "string",
+      "enum": ["user-requested", "policy", "timeout", "superseded"]
+    },
+    "Plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A parsed, classified workflow at an immutable revision. A plan never carries caller-selected commands.",
+      "x-ores-table": "run_plans",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["repository", "revision", "workflowPath"]],
+      "x-ores-indexes": [["repository", "createdAt"]],
+      "required": ["id", "repository", "revision", "workflowPath", "parityLane", "jobCount", "supported", "exclusions", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "repository": { "type": "string", "minLength": 3, "maxLength": 140, "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$" },
+        "revision": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "workflowPath": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "parityLane": { "$ref": "#/$defs/ParityLane" },
+        "jobCount": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "supported": { "type": "boolean" },
+        "exclusions": { "type": "array", "items": { "type": "string" }, "maxItems": 128 },
+        "profile": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One execution of a plan for one org. Terminal states are succeeded, failed and cancelled.",
+      "x-ores-table": "runs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["planId", "attempt"]],
+      "x-ores-indexes": [["orgId", "queuedAt"], ["status"]],
+      "required": ["id", "planId", "orgId", "status", "attempt", "queuedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "planId": { "type": "string", "format": "uuid", "x-ores-references": "Plan.id" },
+        "orgId": { "type": "string", "format": "uuid" },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "queuedAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" },
+        "requestedBy": { "type": "string", "format": "uuid" }
+      }
+    },
+    "Job": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One job of a run. needs holds the static dependency names validated for unknown nodes and cycles.",
+      "x-ores-table": "run_jobs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["runId", "name"]],
+      "x-ores-indexes": [["status"]],
+      "required": ["id", "runId", "name", "status", "profile", "needs"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "profile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "needs": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" },
+        "exitCode": { "type": "integer" }
+      }
+    },
+    "Step": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One ordered step of a job. Steps are declarative and never carry caller-selected shell.",
+      "x-ores-table": "run_steps",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["jobId", "ordinal"]],
+      "required": ["id", "jobId", "ordinal", "name"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "jobId": { "type": "string", "format": "uuid", "x-ores-references": "Job.id" },
+        "ordinal": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "conclusion": { "$ref": "#/$defs/StepConclusion" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "LogChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A contiguous slice of a job log. Chunks are dense and ordered by sequence for websocket replay.",
+      "x-ores-table": "run_log_chunks",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["jobId", "sequence"]],
+      "x-ores-indexes": [["emittedAt"]],
+      "required": ["id", "jobId", "sequence", "offsetBytes", "body", "truncated", "emittedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "jobId": { "type": "string", "format": "uuid", "x-ores-references": "Job.id" },
+        "sequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "offsetBytes": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "body": { "type": "string", "maxLength": 65536 },
+        "truncated": { "type": "boolean" },
+        "emittedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "RunCancellation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A cancellation claim against a run. At most one per run; effectiveAt is set once workers acknowledge.",
+      "x-ores-table": "run_cancellations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["runId"]],
+      "x-ores-indexes": [["reason", "requestedAt"]],
+      "required": ["id", "runId", "reason", "requestedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "reason": { "$ref": "#/$defs/CancellationReason" },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "requestedBy": { "type": "string", "format": "uuid" },
+        "effectiveAt": { "type": "string", "format": "date-time" },
+        "note": { "type": "string", "maxLength": 200 }
+      }
+    }
+  }
+}

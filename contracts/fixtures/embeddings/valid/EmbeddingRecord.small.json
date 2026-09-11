@@ -1,0 +1,15 @@
+{
+  "id": "0000003d-1111-4222-8333-444455556666",
+  "spaceId": "0000003c-1111-4222-8333-444455556666",
+  "entityId": "ci.yml",
+  "vector": [
+    0.1,
+    -0.25,
+    0.5,
+    0.0
+  ],
+  "dims": 4,
+  "checksum": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "sourceRevision": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
+  "createdAt": "2026-03-14T09:26:53Z"
+}

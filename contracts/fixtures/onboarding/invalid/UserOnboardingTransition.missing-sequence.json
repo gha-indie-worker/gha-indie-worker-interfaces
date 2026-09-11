@@ -1,0 +1,8 @@
+{
+  "id": "0000000d-1111-4222-8333-444455556666",
+  "userId": "00000003-1111-4222-8333-444455556666",
+  "fromState": "created",
+  "toState": "email-verified",
+  "event": "email.verified",
+  "occurredAt": "2026-03-14T09:26:53Z"
+}

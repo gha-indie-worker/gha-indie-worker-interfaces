@@ -1,0 +1,17 @@
+{
+  "id": "00000028-1111-4222-8333-444455556666",
+  "deliveryId": "00000029-1111-4222-8333-444455556666",
+  "event": "workflow_run",
+  "action": "completed",
+  "repository": "gha-indie-worker/gha-clone-server.rs",
+  "headSha": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
+  "workflowPath": ".github/workflows/ci.yml",
+  "signatureValid": true,
+  "status": "dispatched",
+  "receivedAt": "2026-03-14T09:26:53Z",
+  "payload": {
+    "workflow_run": {
+      "conclusion": "failure"
+    }
+  }
+}

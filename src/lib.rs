@@ -1,12 +1,22 @@
 #![forbid(unsafe_code)]
 
 //! Data-only contracts. Implementations live in clients, servers, and lib-core.
+//!
+//! The `v1` slice family mirrors the two independent authorities in
+//! `contracts/typespec/<slice>.tsp` and `contracts/json-schema/<slice>.schema.json`.
+//! The build-log families are independently authored and independently admitted
+//! by their own TJSV gates. Generated witnesses/IR/receipts are evidence only;
+//! none of these generated artifacts is an authored authority.
+//!
+//! The legacy `protocol` / `schema` surface (`schema/v1/workerlease.json`) is
+//! retained for existing callers.
 
 pub mod build_log;
 pub mod build_log_metadata;
 pub mod error;
 pub mod protocol;
 pub mod schema;
+pub mod v1;
 
 pub use build_log::{
     LogSidecarCommandStarted, LogSidecarCommandTerminal, LogSidecarFrameDescriptor,
@@ -22,3 +32,4 @@ pub use build_log_metadata::{
 pub use error::InterfaceError;
 pub use protocol::{Health, WorkerLease, PROTOCOL_VERSION};
 pub use schema::{SCHEMA_ID, SCHEMA_REVISION};
+pub use v1::{CONTRACT_VERSION, SLICES};

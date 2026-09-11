@@ -1,0 +1,10 @@
+{
+  "id": "00000033-1111-4222-8333-444455556666",
+  "sessionId": "00000032-1111-4222-8333-444455556666",
+  "sequence": 2,
+  "role": "agent",
+  "body": "Your run is queued behind one other job.",
+  "redacted": false,
+  "attachments": [],
+  "sentAt": "2026-03-14T09:27:31Z"
+}

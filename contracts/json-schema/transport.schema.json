@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/transport.schema.json",
+  "title": "GHA Indie Worker — transport",
+  "description": "Independently authored JSON Schema authority for the websocket and stateful-TCP avenues. Peer of contracts/typespec/transport.tsp; neither is generated from the other. The tagged unions are expressed as sealed objects plus a kind discriminator, because the contract subset carries no sum type; the oneOf blocks below are the runtime refinement that makes each kind's payload exact.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Transport",
+  "$defs": {
+    "WsCommandKind": {
+      "type": "string",
+      "description": "Client to server commands on the websocket avenue. The kind field is the union discriminator.",
+      "enum": ["subscribe-run-logs", "unsubscribe-run-logs", "presence", "chat-event", "heartbeat"]
+    },
+    "WsEventKind": {
+      "type": "string",
+      "description": "Server to client events on the websocket avenue. The kind field is the union discriminator.",
+      "enum": ["run-log", "presence", "chat-event", "heartbeat-ack", "error"]
+    },
+    "TcpFrameKind": {
+      "type": "string",
+      "description": "Frame kinds on the stateful TCP avenue. Every frame is length-prefixed JSON.",
+      "enum": ["hello", "command", "event", "ping", "pong", "bye"]
+    },
+    "WsCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One websocket command as received. The union is tagged by kind; fields not named by that kind are absent.",
+      "x-ores-table": "ws_command_audit",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["connectionId", "clientSequence"]],
+      "x-ores-indexes": [["kind", "sentAt"]],
+      "required": ["id", "kind", "connectionId", "correlationId", "clientSequence", "sentAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "kind": { "$ref": "#/$defs/WsCommandKind" },
+        "connectionId": { "type": "string", "format": "uuid" },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "clientSequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "runId": { "type": "string", "format": "uuid" },
+        "jobId": { "type": "string", "format": "uuid" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "channel": { "type": "string", "maxLength": 120 },
+        "cursor": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "payload": { "type": "object", "x-ores-json": true },
+        "sentAt": { "type": "string", "format": "date-time" }
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "subscribe-run-logs" } }, "required": ["kind", "runId"] },
+        { "properties": { "kind": { "const": "unsubscribe-run-logs" } }, "required": ["kind", "runId"] },
+        { "properties": { "kind": { "const": "presence" } }, "required": ["kind", "channel"] },
+        { "properties": { "kind": { "const": "chat-event" } }, "required": ["kind", "sessionId", "payload"] },
+        { "properties": { "kind": { "const": "heartbeat" } }, "required": ["kind"] }
+      ]
+    },
+    "WsEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One websocket event as emitted. The union is tagged by kind; fields not named by that kind are absent.",
+      "x-ores-table": "ws_event_audit",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["connectionId", "serverSequence"]],
+      "x-ores-indexes": [["kind", "emittedAt"]],
+      "required": ["id", "kind", "connectionId", "serverSequence", "emittedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "kind": { "$ref": "#/$defs/WsEventKind" },
+        "connectionId": { "type": "string", "format": "uuid" },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "serverSequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "runId": { "type": "string", "format": "uuid" },
+        "jobId": { "type": "string", "format": "uuid" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "message": { "type": "string", "maxLength": 200 },
+        "payload": { "type": "object", "x-ores-json": true },
+        "emittedAt": { "type": "string", "format": "date-time" }
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "run-log" } }, "required": ["kind", "runId", "jobId", "payload"] },
+        { "properties": { "kind": { "const": "presence" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "chat-event" } }, "required": ["kind", "sessionId", "payload"] },
+        { "properties": { "kind": { "const": "heartbeat-ack" } }, "required": ["kind"] },
+        { "properties": { "kind": { "const": "error" } }, "required": ["kind", "message"] }
+      ]
+    },
+    "TcpFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One frame on the stateful TCP avenue. payloadBytes is the decoded length and is bounded by the codec.",
+      "x-ores-table": "tcp_frame_audit",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["connectionId", "sequence"]],
+      "x-ores-indexes": [["kind", "receivedAt"]],
+      "required": ["id", "kind", "connectionId", "sequence", "payloadBytes", "receivedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "kind": { "$ref": "#/$defs/TcpFrameKind" },
+        "connectionId": { "type": "string", "format": "uuid" },
+        "sequence": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "payloadBytes": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "payload": { "type": "object", "x-ores-json": true },
+        "receivedAt": { "type": "string", "format": "date-time" }
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "hello" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "command" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "event" } }, "required": ["kind", "payload"] },
+        { "properties": { "kind": { "const": "ping" } }, "required": ["kind"] },
+        { "properties": { "kind": { "const": "pong" } }, "required": ["kind"] },
+        { "properties": { "kind": { "const": "bye" } }, "required": ["kind"] }
+      ]
+    }
+  }
+}

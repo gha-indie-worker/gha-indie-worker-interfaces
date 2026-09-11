@@ -1,0 +1,11 @@
+{
+  "id": "00000046-1111-4222-8333-444455556666",
+  "entity": "runs.Run",
+  "entityId": "00000015-1111-4222-8333-444455556666",
+  "op": "delete",
+  "payload": {},
+  "conflictPolicy": "reject",
+  "originNode": "api-1",
+  "originSequence": 43,
+  "recordedAt": "2026-03-14T09:26:53Z"
+}

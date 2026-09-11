@@ -3,6 +3,7 @@
 /build
 /.dart_tool
 /coverage
+/.typespec-json-schema-validator
 .DS_Store
 .env
 .env.*

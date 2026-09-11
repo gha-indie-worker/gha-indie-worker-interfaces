@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/errors.schema.json",
+  "title": "GHA Indie Worker — errors",
+  "description": "Independently authored JSON Schema authority for RFC 9457 Problem Details. Peer of contracts/typespec/errors.tsp; neither is generated from the other. Servers emit this document with Content-Type application/problem+json.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Errors",
+  "x-ores-invariants": [
+    "type is an absolute URI under https://indiebuild.dev/problems/ and its meaning never changes once published",
+    "status equals the HTTP response status the document was returned with",
+    "code and traceId are the only registered extension members; everything else lives under extensions"
+  ],
+  "$defs": {
+    "Problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An RFC 9457 problem document as emitted by every server in the fleet, and as persisted for support triage.",
+      "x-ores-table": "problem_events",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["status", "occurredAt"], ["code"]],
+      "required": ["id", "type", "title", "status", "occurredAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "type": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "detail": { "type": "string", "maxLength": 2000 },
+        "instance": { "type": "string", "maxLength": 255 },
+        "code": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$" },
+        "traceId": { "type": "string", "maxLength": 64 },
+        "extensions": { "type": "object", "x-ores-json": true },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ProblemViolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One field-level violation attached to a problem. pointer is an RFC 6901 JSON pointer into the rejected document.",
+      "x-ores-table": "problem_violations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["problemId", "pointer", "rule"]],
+      "x-ores-indexes": [["rule"]],
+      "required": ["id", "problemId", "pointer", "rule", "message"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "problemId": { "type": "string", "format": "uuid", "x-ores-references": "Problem.id" },
+        "pointer": { "type": "string", "maxLength": 255 },
+        "rule": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 400 }
+      }
+    }
+  }
+}

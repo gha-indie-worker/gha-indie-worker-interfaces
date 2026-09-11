@@ -1,0 +1,13 @@
+{
+  "id": "0000002a-1111-4222-8333-444455556666",
+  "registry": "ghcr.io",
+  "repository": "gha-indie-worker/rust-verify",
+  "tag": "sha-9f9f9f9",
+  "digest": "sha256-abababababababababababababababababababababababababababababababab",
+  "action": "push",
+  "occurredAt": "2026-03-14T09:26:53Z",
+  "receivedAt": "2026-03-14T09:27:31Z",
+  "payload": {
+    "source": "distribution-v2"
+  }
+}

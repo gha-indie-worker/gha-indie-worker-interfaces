@@ -1,0 +1,17 @@
+{
+  "$comment": "ores-contracts config for the identity slice. Paths resolve relative to this file. The two authorities are independent peers; neither is generated from the other.",
+  "typespec": "../typespec/identity.tsp",
+  "jsonSchema": "../json-schema/identity.schema.json",
+  "out": "../../generated/identity",
+  "target": "../../target/ores-contracts/identity",
+  "artifacts": [
+    "sql/schema.sql",
+    "rust/types.rs",
+    "seaorm/entities.rs",
+    "diesel/schema.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}

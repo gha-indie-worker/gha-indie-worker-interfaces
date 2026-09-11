@@ -1,0 +1,12 @@
+{
+  "id": "0000003e-1111-4222-8333-444455556666",
+  "spaceId": "0000003c-1111-4222-8333-444455556666",
+  "kind": "decoupling",
+  "xEntity": "ci.yml",
+  "yEntity": "release.yml",
+  "coefficient": -0.42,
+  "pValue": 0.013,
+  "window": "p30d",
+  "sampleN": 412,
+  "detectedAt": "2026-03-14T09:27:31Z"
+}

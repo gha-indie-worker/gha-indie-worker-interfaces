@@ -1,0 +1,12 @@
+{
+  "id": "00000054-1111-4222-8333-444455556666",
+  "kind": "hello",
+  "connectionId": "00000051-1111-4222-8333-444455556666",
+  "sequence": 0,
+  "payloadBytes": 64,
+  "payload": {
+    "protocol": "1",
+    "node": "worker-7"
+  },
+  "receivedAt": "2026-03-14T09:26:53Z"
+}

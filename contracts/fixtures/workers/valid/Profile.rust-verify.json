@@ -1,0 +1,15 @@
+{
+  "id": "0000001f-1111-4222-8333-444455556666",
+  "name": "rust-verify",
+  "image": "ghcr.io/gha-indie-worker/rust-verify",
+  "imageDigest": "sha256-abababababababababababababababababababababababababababababababab",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo test --locked"
+  ],
+  "artifactPaths": [],
+  "cpuMillis": 4000,
+  "memoryMebibytes": 8192,
+  "timeoutSeconds": 1800,
+  "reviewedAt": "2026-03-14T09:26:53Z"
+}

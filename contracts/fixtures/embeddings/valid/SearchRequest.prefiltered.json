@@ -1,0 +1,15 @@
+{
+  "id": "0000003f-1111-4222-8333-444455556666",
+  "spaceId": "0000003c-1111-4222-8333-444455556666",
+  "queryText": "flaky rust test",
+  "queryVector": [
+    0.2,
+    0.2,
+    -0.1,
+    0.9
+  ],
+  "lexicalPrefilter": "rust AND flaky",
+  "topK": 20,
+  "minScore": 0.35,
+  "requestedAt": "2026-03-14T09:26:53Z"
+}

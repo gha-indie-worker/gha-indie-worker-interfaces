@@ -20,4 +20,3 @@ impl fmt::Display for InterfaceError {
 }
 
 impl std::error::Error for InterfaceError {}
-

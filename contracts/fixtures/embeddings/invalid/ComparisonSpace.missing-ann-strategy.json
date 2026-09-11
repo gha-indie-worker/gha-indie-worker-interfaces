@@ -1,0 +1,15 @@
+{
+  "id": "0000003c-1111-4222-8333-444455556666",
+  "tenantId": "00000001-1111-4222-8333-444455556666",
+  "entityKind": "workflow",
+  "entityId": "ci.yml",
+  "modelFamily": "e5",
+  "modelName": "e5-large-v2",
+  "modelVersion": "2024-05",
+  "dimsNative": 1024,
+  "role": "document",
+  "normalization": "l2",
+  "distanceMetric": "cosine",
+  "generationProfile": "batch-nightly",
+  "createdAt": "2026-03-14T09:26:53Z"
+}

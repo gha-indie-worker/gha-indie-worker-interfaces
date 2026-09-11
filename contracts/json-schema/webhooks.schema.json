@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/webhooks.schema.json",
+  "title": "GHA Indie Worker — webhooks",
+  "description": "Independently authored JSON Schema authority for inbound GitHub deliveries and registry image events. Peer of contracts/typespec/webhooks.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Webhooks",
+  "$defs": {
+    "DeliveryStatus": {
+      "type": "string",
+      "description": "Where a delivery stopped. rejected and duplicate are terminal and never dispatch work.",
+      "enum": ["received", "verified", "rejected", "dispatched", "duplicate"]
+    },
+    "RegistryEventAction": {
+      "type": "string",
+      "enum": ["push", "delete", "mirror"]
+    },
+    "GitHubDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The envelope for one GitHub webhook delivery. The HMAC verdict is recorded before any fetch or plan.",
+      "x-ores-table": "github_deliveries",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["deliveryId"]],
+      "x-ores-indexes": [["repository", "receivedAt"], ["status"]],
+      "required": ["id", "deliveryId", "event", "repository", "signatureValid", "status", "receivedAt", "payload"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "deliveryId": { "type": "string", "format": "uuid" },
+        "event": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "action": { "type": "string", "maxLength": 64 },
+        "repository": { "type": "string", "minLength": 3, "maxLength": 140, "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$" },
+        "headSha": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "workflowPath": { "type": "string", "maxLength": 255 },
+        "signatureValid": { "type": "boolean" },
+        "status": { "$ref": "#/$defs/DeliveryStatus" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "rejectionReason": { "type": "string", "maxLength": 200 },
+        "payload": { "type": "object", "x-ores-json": true }
+      }
+    },
+    "RegistryImageEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A normalized container-registry image event. ECR EventBridge and distribution v2 payloads fold into this shape.",
+      "x-ores-table": "registry_image_events",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["registry", "repository", "digest", "action", "occurredAt"]],
+      "x-ores-indexes": [["repository", "occurredAt"]],
+      "required": ["id", "registry", "repository", "digest", "action", "occurredAt", "receivedAt", "payload"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "registry": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "repository": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "tag": { "type": "string", "maxLength": 128 },
+        "digest": { "type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256-[0-9a-f]+$" },
+        "action": { "$ref": "#/$defs/RegistryEventAction" },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "sourceDeliveryId": { "type": "string", "format": "uuid", "x-ores-references": "GitHubDelivery.id" },
+        "payload": { "type": "object", "x-ores-json": true }
+      }
+    }
+  }
+}
