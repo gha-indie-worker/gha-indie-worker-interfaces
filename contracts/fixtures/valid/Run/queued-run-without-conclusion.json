@@ -1,0 +1,11 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a95",
+  "workflowId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a84",
+  "orgId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a80",
+  "runNumber": 413,
+  "attempt": 1,
+  "status": "queued",
+  "headSha": "9f1a2b3c4d5e6f708192a3b4c5d6e7f809a1b2c3",
+  "event": "workflow_dispatch",
+  "createdAt": "2026-03-01T12:10:00Z"
+}

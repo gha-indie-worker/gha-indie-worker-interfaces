@@ -1,0 +1,418 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/session.schema.json",
+  "title": "GHA Indie Worker live session protocol",
+  "$comment": "HUMAN-AUTHORED PEER AUTHORITY of contracts/typespec/session.tsp. Neither is generated from the other. This document describes the JSON (WebSocket) encoding of `runtime::session::Frame`; the TCP encoding is the same vocabulary with a 4-byte big-endian length prefix, described in contracts/proto/session.proto. Integer fields that are u64 in Rust are bounded here at 2^53-1, the largest integer JSON carries exactly \u2014 the same bound is authored in session.tsp.",
+  "x-protocol-version": 1,
+  "x-max-frame-bytes": 1048576,
+  "$ref": "#/$defs/Frame",
+  "$defs": {
+    "ErrorCode": {
+      "description": "Protocol-level failure code. Byte-tagged on the TCP encoding; `runtime::session::ErrorCode`. Authored here as well as in contract.schema.json because the session lane is a separate document; scripts/parity.mjs checks the two spellings agree.",
+      "type": "string",
+      "enum": [
+        "unsupported_version",
+        "unauthorized",
+        "forbidden",
+        "protocol",
+        "rate_limited",
+        "not_found",
+        "going_away",
+        "timeout",
+        "internal"
+      ]
+    },
+    "HelloFrame": {
+      "description": "Client's opening frame. `resume` carries a session id from a previous connection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "hello"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "resume": {
+          "description": "Session id to resume. Absent on a fresh connection.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "WelcomeFrame": {
+      "description": "Server's answer to Hello. `resumed` is false when the named session could not be resumed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "session",
+        "resumed",
+        "heartbeatSeconds"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "welcome"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "resumed": {
+          "type": "boolean"
+        },
+        "heartbeatSeconds": {
+          "description": "How often the peer should expect a Ping. Zero disables heartbeating.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
+        }
+      }
+    },
+    "PingFrame": {
+      "description": "Liveness probe. The peer must answer with Pong carrying the same nonce.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "nonce"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "ping"
+        },
+        "nonce": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "PongFrame": {
+      "description": "Answer to Ping. A Pong with an unexpected nonce is a protocol error.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "nonce"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pong"
+        },
+        "nonce": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "SubscribeFrame": {
+      "description": "Subscribe to a stream from a sequence, granting an initial credit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stream",
+        "from",
+        "credit"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "subscribe"
+        },
+        "stream": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "from": {
+          "description": "First sequence wanted. 0 means from the beginning of what is retained.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "credit": {
+          "description": "Events the server may send before it must wait for more credit.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "UnsubscribeFrame": {
+      "description": "Stop delivery of a stream. Outstanding credit is discarded.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stream"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "unsubscribe"
+        },
+        "stream": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "CreditFrame": {
+      "description": "Grant more credit on an existing subscription. This is the only way the server earns permission to send.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stream",
+        "additional"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "credit"
+        },
+        "stream": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "additional": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "EventFrame": {
+      "description": "One event on a stream. Consumes exactly one unit of credit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stream",
+        "sequence",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "event"
+        },
+        "stream": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sequence": {
+          "description": "Monotonic per stream. A client resumes by naming the next sequence it wants.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "payload": {
+          "description": "Opaque payload, base64 in the JSON encoding.",
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "LaggedFrame": {
+      "description": "The subscriber fell too far behind and the server dropped events. Told, never hidden.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "stream",
+        "skippedTo"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "lagged"
+        },
+        "stream": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "skippedTo": {
+          "description": "The sequence delivery jumped to. Everything between the last Event and this is gone.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "CommandFrame": {
+      "description": "A request from the client. Answered by exactly one Ack or Error with the same id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "verb",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "command"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "verb": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.]*$"
+        },
+        "payload": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "AckFrame": {
+      "description": "Successful answer to a Command.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "ack"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "payload": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "ErrorFrame": {
+      "description": "Failed answer to a Command, or a connection-level failure when `id` is absent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "error"
+        },
+        "id": {
+          "description": "The Command this answers. Absent for a connection-level error.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "CloseFrame": {
+      "description": "The sender is going away. No further frames are sent or read.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "close"
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1024
+        }
+      }
+    },
+    "Frame": {
+      "description": "Every frame on the wire. Discriminated by `kind`; the JSON encoding is a closed union.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HelloFrame"
+        },
+        {
+          "$ref": "#/$defs/WelcomeFrame"
+        },
+        {
+          "$ref": "#/$defs/PingFrame"
+        },
+        {
+          "$ref": "#/$defs/PongFrame"
+        },
+        {
+          "$ref": "#/$defs/SubscribeFrame"
+        },
+        {
+          "$ref": "#/$defs/UnsubscribeFrame"
+        },
+        {
+          "$ref": "#/$defs/CreditFrame"
+        },
+        {
+          "$ref": "#/$defs/EventFrame"
+        },
+        {
+          "$ref": "#/$defs/LaggedFrame"
+        },
+        {
+          "$ref": "#/$defs/CommandFrame"
+        },
+        {
+          "$ref": "#/$defs/AckFrame"
+        },
+        {
+          "$ref": "#/$defs/ErrorFrame"
+        },
+        {
+          "$ref": "#/$defs/CloseFrame"
+        }
+      ]
+    }
+  }
+}

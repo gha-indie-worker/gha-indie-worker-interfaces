@@ -1,0 +1,60 @@
+{
+  "$comment": "Fixture manifest. Every entry names the hand-authored JSON Schema document that owns the model; scripts/check_fixtures.py validates fixtures/valid/<Model>/*.json against `#/$defs/<Model>` of that document and requires fixtures/invalid/<Model>/*.json to be REJECTED by it. scripts/parity.mjs runs the same corpus against the schema TypeSpec emits. A model listed here with no fixtures \u2014 or a $defs object absent from this file \u2014 is a gate failure, so adding a model cannot skip its evidence.",
+  "documents": {
+    "contract": "contracts/json-schema/contract.schema.json",
+    "session": "contracts/json-schema/session.schema.json",
+    "errors": "contracts/json-schema/errors.schema.json",
+    "discovery": "contracts/json-schema/discovery.schema.json",
+    "lease": "contracts/json-schema/lease.schema.json"
+  },
+  "unionMembers": {
+    "Frame": [
+      "AckFrame",
+      "CloseFrame",
+      "CommandFrame",
+      "CreditFrame",
+      "ErrorFrame",
+      "EventFrame",
+      "HelloFrame",
+      "LaggedFrame",
+      "PingFrame",
+      "PongFrame",
+      "SubscribeFrame",
+      "UnsubscribeFrame",
+      "WelcomeFrame"
+    ]
+  },
+  "models": {
+    "ApiError": "errors",
+    "Artifact": "contract",
+    "Attestation": "contract",
+    "CacheEntry": "contract",
+    "ComparisonSpace": "contract",
+    "EnableSpaceRequest": "discovery",
+    "ErrorDetail": "errors",
+    "Evidence": "discovery",
+    "Finding": "contract",
+    "Frame": "session",
+    "Health": "lease",
+    "Invitation": "contract",
+    "InviteRequest": "errors",
+    "Job": "contract",
+    "JoinPolicy": "contract",
+    "Membership": "contract",
+    "Neighbour": "discovery",
+    "OnboardingFailure": "errors",
+    "Org": "contract",
+    "PageInfo": "errors",
+    "Principal": "errors",
+    "Run": "contract",
+    "Runner": "contract",
+    "RunnerGroup": "contract",
+    "SearchRequest": "discovery",
+    "SearchResponse": "discovery",
+    "Seats": "contract",
+    "Step": "contract",
+    "User": "contract",
+    "WorkerLease": "lease",
+    "Workflow": "contract"
+  }
+}

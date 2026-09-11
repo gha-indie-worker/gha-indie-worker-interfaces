@@ -1,0 +1,9 @@
+{
+  "statusCode": 409,
+  "code": "forbidden",
+  "message": "x",
+  "requestId": "r1",
+  "onboarding": {
+    "reason": "seats_exhausted"
+  }
+}

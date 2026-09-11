@@ -1,0 +1,7 @@
+{
+  "subject": "s",
+  "realm": "customer",
+  "audience": "indiebuild-api",
+  "assuranceLevel": 1,
+  "orgId": "org-42"
+}

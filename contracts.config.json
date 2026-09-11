@@ -1,0 +1,17 @@
+{
+  "$comment": "Input to @oresoftware/ores-contracts, the fleet's existing parity toolkit. It reads the PERSISTED subset only -- contracts/typespec/main.tsp and contracts/json-schema/contract.schema.json -- parses each authority into its own IR, drives the same emitters from each, and byte-compares the results. This repo does not reimplement any of that. scripts/parity.mjs adds only what ores-contracts deliberately does not cover: the wire-only types (session frames, HTTP errors, the discovery surface), the fixture corpus, and the protobuf alignment.",
+  "typespec": "contracts/typespec/main.tsp",
+  "jsonSchema": "contracts/json-schema/contract.schema.json",
+  "out": "generated",
+  "target": "target/ores-contracts",
+  "artifacts": [
+    "sql/schema.sql",
+    "rust/types.rs",
+    "seaorm/entities.rs",
+    "diesel/schema.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}

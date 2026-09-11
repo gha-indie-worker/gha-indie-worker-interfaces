@@ -1,0 +1,11 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a9a",
+  "orgId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a80",
+  "name": "macos-01",
+  "os": "macos",
+  "arch": "arm64",
+  "state": "offline",
+  "ephemeral": false,
+  "isolation": "process",
+  "labels": []
+}

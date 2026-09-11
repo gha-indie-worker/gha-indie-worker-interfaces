@@ -1,0 +1,11 @@
+{
+  "annStrategy": "halfvec_exact",
+  "evidence": {
+    "migrationReplay": true,
+    "tenantIsolation": true,
+    "lexicalOnlyRetrieval": true,
+    "exactVsAnnRecall": true,
+    "rollback": true,
+    "backupRestore": true
+  }
+}

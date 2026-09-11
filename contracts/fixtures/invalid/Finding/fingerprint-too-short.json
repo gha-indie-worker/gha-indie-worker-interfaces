@@ -1,0 +1,12 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a8e",
+  "orgId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a80",
+  "spaceId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a8d",
+  "runId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a85",
+  "severity": "high",
+  "title": "Cache key collides across architectures",
+  "detail": "Two runs on different architectures restored the same cargo registry cache.",
+  "fingerprint": "9f1a",
+  "score": 0.91,
+  "createdAt": "2026-03-01T12:08:00Z"
+}

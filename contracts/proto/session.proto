@@ -1,0 +1,140 @@
+// ============================================================================
+// Protobuf v3 — runtime-validated wire types for the live session protocol.
+//
+// This is the THIRD description of the session vocabulary, and unlike the other
+// two it is not a peer authority: TypeSpec and JSON Schema describe what a frame
+// *is*, and this file describes how it is *validated at runtime* on the binary
+// transport. scripts/parity.mjs checks it agrees with both — every field's
+// canonical protobuf JSON name must be a field of the same model in
+// contracts/typespec/session.tsp and contracts/json-schema/session.schema.json,
+// and no field may exist here that neither authority declares.
+//
+// FIELD-NUMBER DISCIPLINE (enforced by scripts/parity.mjs, see proto/README.md)
+//   * A field number, once assigned, is never reused for a different field —
+//     not even after the field is deleted. An old peer decoding a new message
+//     would silently read the new field into the old one's slot.
+//   * Removing a field means `reserved <number>;` AND `reserved "<name>";`.
+//   * Numbers 1-15 encode in one byte: they are spent on the fields present in
+//     every frame, and not handed out first-come.
+//   * Changing a field's type in place is a removal plus an addition.
+// ============================================================================
+syntax = "proto3";
+
+package gha_indie_worker.session.v1;
+
+option java_package = "dev.indiebuild.gha.session.v1";
+option go_package = "github.com/gha-indie-worker/gha-indie-worker-interfaces/gen/session/v1;sessionv1";
+
+// Protocol version negotiated by Hello. Mirrors runtime::session::PROTOCOL_VERSION.
+enum ProtocolVersion {
+  PROTOCOL_VERSION_UNSPECIFIED = 0;
+  PROTOCOL_VERSION_1 = 1;
+}
+
+// Mirrors runtime::session::ErrorCode. The numbers are the byte tags of the TCP
+// encoding (`ErrorCode::tag`), so the proto number and the wire tag never drift.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_UNSUPPORTED_VERSION = 1;
+  ERROR_CODE_UNAUTHORIZED = 2;
+  ERROR_CODE_FORBIDDEN = 3;
+  ERROR_CODE_PROTOCOL = 4;
+  ERROR_CODE_RATE_LIMITED = 5;
+  ERROR_CODE_NOT_FOUND = 6;
+  ERROR_CODE_GOING_AWAY = 7;
+  ERROR_CODE_TIMEOUT = 8;
+  ERROR_CODE_INTERNAL = 9;
+}
+
+message HelloFrame {
+  uint32 version = 1;
+  optional string resume = 2;
+}
+
+message WelcomeFrame {
+  string session = 1;
+  bool resumed = 2;
+  uint32 heartbeat_seconds = 3;
+}
+
+message PingFrame {
+  uint64 nonce = 1;
+}
+
+message PongFrame {
+  uint64 nonce = 1;
+}
+
+message SubscribeFrame {
+  string stream = 1;
+  uint64 from = 2;
+  uint32 credit = 3;
+}
+
+message UnsubscribeFrame {
+  string stream = 1;
+}
+
+message CreditFrame {
+  string stream = 1;
+  uint32 additional = 2;
+}
+
+message EventFrame {
+  string stream = 1;
+  uint64 sequence = 2;
+  bytes payload = 3;
+
+  // Removed 2026-08 — the timestamp was the server's clock, which made a replayed
+  // event look newer than it was. Callers derive time from the payload instead.
+  // The number and the name are burned so a stale peer cannot resurrect either.
+  reserved 4;
+  reserved "observed_at";
+}
+
+message LaggedFrame {
+  string stream = 1;
+  uint64 skipped_to = 2;
+}
+
+message CommandFrame {
+  uint64 id = 1;
+  string verb = 2;
+  bytes payload = 3;
+}
+
+message AckFrame {
+  uint64 id = 1;
+  bytes payload = 2;
+}
+
+message ErrorFrame {
+  optional uint64 id = 1;
+  ErrorCode code = 2;
+  string message = 3;
+}
+
+message CloseFrame {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+// Every frame on the wire. The oneof tag numbers are the frame tags of the TCP
+// encoding, so a binary frame's first tag byte and its proto field number agree.
+message Frame {
+  oneof kind {
+    HelloFrame hello = 1;
+    WelcomeFrame welcome = 2;
+    PingFrame ping = 3;
+    PongFrame pong = 4;
+    SubscribeFrame subscribe = 5;
+    UnsubscribeFrame unsubscribe = 6;
+    CreditFrame credit = 7;
+    EventFrame event = 8;
+    LaggedFrame lagged = 9;
+    CommandFrame command = 10;
+    AckFrame ack = 11;
+    ErrorFrame error = 12;
+    CloseFrame close = 13;
+  }
+}

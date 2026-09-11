@@ -1,0 +1,9 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a8b",
+  "runId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a85",
+  "name": "receipt",
+  "sizeBytes": 4096,
+  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "retentionDays": 401,
+  "expiresAt": "2026-05-30T12:07:31Z"
+}

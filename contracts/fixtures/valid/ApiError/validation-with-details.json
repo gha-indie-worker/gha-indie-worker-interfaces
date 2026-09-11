@@ -1,0 +1,12 @@
+{
+  "statusCode": 400,
+  "code": "protocol",
+  "message": "request body is invalid",
+  "requestId": "01J8Z9Q4R7XK2M5N6P7Q8R9S0U",
+  "details": [
+    {
+      "pointer": "/email",
+      "message": "not an email address"
+    }
+  ]
+}

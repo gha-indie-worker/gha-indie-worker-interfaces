@@ -1,0 +1,5 @@
+{
+  "kind": "command",
+  "verb": "runs.cancel",
+  "payload": ""
+}

@@ -1,0 +1,9 @@
+{
+  "neighbours": {
+    "entityId": "run:a",
+    "score": 0.9,
+    "excerpt": "x"
+  },
+  "exact": true,
+  "strategy": "halfvec_exact"
+}

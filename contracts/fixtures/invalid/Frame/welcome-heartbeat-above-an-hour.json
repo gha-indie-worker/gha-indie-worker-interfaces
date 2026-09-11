@@ -1,0 +1,6 @@
+{
+  "kind": "welcome",
+  "session": "s1",
+  "resumed": false,
+  "heartbeatSeconds": 3601
+}

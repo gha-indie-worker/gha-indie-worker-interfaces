@@ -1,0 +1,74 @@
+name: contracts
+
+# The parity gate. This is the job that enforces the repository's one rule:
+# TypeSpec and JSON Schema are peers, and a discrepancy stops the pipeline for a
+# human instead of being reconciled by a machine.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: python fixture validator
+        run: pip install --quiet 'jsonschema>=4.20'
+
+      # No --offline. On a runner every lane must run; a lane that cannot run is
+      # a finding, because a gate that passes by not looking is worse than none.
+      - name: parity gate (both authorities, every fixture, the proto)
+        run: node scripts/parity.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-receipt
+          path: target/parity/receipt.json
+
+  # The persisted subset, driven through @oresoftware/ores-contracts: each
+  # authority emits SQL / SeaORM / Diesel / Rust / TS / Dart independently and the
+  # two sets must be byte-identical. parity.mjs also runs this, and running it as
+  # its own job means its receipt is a separate artifact a reviewer can open.
+  ores-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install ores-contracts check --config contracts.config.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ores-contracts-receipt
+          path: target/ores-contracts/receipt.json
+
+  # generated/ is committed, so a reviewer reads the diff. This proves the
+  # committed artifacts are the ones both authorities actually agree on.
+  generated-is-current:
+    needs: [parity, ores-contracts]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install ores-contracts generate --config contracts.config.json
+      - name: generated/ is up to date (run `npx ores-contracts generate` and commit)
+        run: git diff --exit-code -- generated

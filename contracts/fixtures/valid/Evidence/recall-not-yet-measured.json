@@ -1,0 +1,8 @@
+{
+  "migrationReplay": true,
+  "tenantIsolation": true,
+  "lexicalOnlyRetrieval": true,
+  "exactVsAnnRecall": false,
+  "rollback": true,
+  "backupRestore": true
+}

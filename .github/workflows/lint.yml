@@ -1,0 +1,24 @@
+name: lint
+
+# This repository calling the fleet's own reusable workflow. Every other repo in
+# the org gets the same file with different `with:` flags, so "how does this org
+# lint" has exactly one answer and it lives in fleet-lint.yml.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  fleet:
+    uses: ./.github/workflows/fleet-lint.yml
+    with:
+      rust: true
+      typescript: true
+      dart: true
+      typespec: true
+      json-schema: true
+      dart-package-dir: generated/dart

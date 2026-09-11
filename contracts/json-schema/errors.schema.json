@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/errors.schema.json",
+  "title": "GHA Indie Worker HTTP error and pagination envelope",
+  "$comment": "HUMAN-AUTHORED PEER AUTHORITY of the error and pagination models in contracts/typespec/http.tsp. Neither is generated from the other. The HTTP *bindings* (routes, verbs, status codes) live only in TypeSpec: JSON Schema cannot express them, and inventing a vendor keyword to fake the comparison would make the parity claim weaker, not stronger. See contracts/README.md.",
+  "$defs": {
+    "ErrorCode": {
+      "description": "Same vocabulary the session protocol closes with, so a client has one error table for both transports.",
+      "type": "string",
+      "enum": [
+        "unsupported_version",
+        "unauthorized",
+        "forbidden",
+        "protocol",
+        "rate_limited",
+        "not_found",
+        "going_away",
+        "timeout",
+        "internal"
+      ]
+    },
+    "ErrorDetail": {
+      "description": "One machine-readable detail of a failure, naming the offending field.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointer",
+        "message"
+      ],
+      "properties": {
+        "pointer": {
+          "description": "JSON Pointer to the offending member of the request, e.g. `/labels/3`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "ApiError": {
+      "description": "The single error shape every operation returns. `code` is the same vocabulary the session protocol closes with, so a client has one error table for both transports.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statusCode",
+        "code",
+        "message",
+        "requestId"
+      ],
+      "properties": {
+        "statusCode": {
+          "type": "integer",
+          "enum": [
+            400,
+            401,
+            403,
+            404,
+            409,
+            429,
+            500
+          ]
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "description": "Human-readable, safe to log. Never contains credentials or request bodies.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "requestId": {
+          "description": "Correlates with the `request-id` response header and the trace. `runtime` puts it in every log line.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "details": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ErrorDetail"
+          }
+        },
+        "onboarding": {
+          "description": "Present on a 409 from an onboarding operation. Lets a client tell `no_seats_available` from `last_owner` without parsing `message`.",
+          "$ref": "#/$defs/OnboardingFailure"
+        }
+      }
+    },
+    "PageInfo": {
+      "description": "Cursor pagination envelope. Cursors are opaque; a client that parses one is relying on an implementation detail.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hasMore"
+      ],
+      "properties": {
+        "nextCursor": {
+          "description": "Cursor for the next page. Absent on the last page.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "hasMore": {
+          "description": "True when a further page exists. Equivalent to `nextCursor` being present, stated so a client need not infer it.",
+          "type": "boolean"
+        }
+      }
+    },
+    "InviteRequest": {
+      "description": "Body of POST /v1/orgs/{orgId}/invitations.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "email",
+        "role"
+      ],
+      "properties": {
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 320,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "role": {
+          "description": "Never above the caller's own role; `runtime::tenancy` refuses escalation.",
+          "type": "string",
+          "enum": [
+            "viewer",
+            "member",
+            "admin",
+            "owner"
+          ]
+        }
+      }
+    },
+    "Realm": {
+      "description": "Which identity realm a token came from. A token is only ever valid in one. `runtime::authz::Realm`.",
+      "type": "string",
+      "enum": [
+        "customer",
+        "admin"
+      ]
+    },
+    "Audience": {
+      "description": "The audience a service introspects FOR. Introspecting without an audience is how a token minted for one service gets replayed against another, so every call names one. `runtime::authz::Audience`.",
+      "type": "string",
+      "enum": [
+        "indiebuild-web",
+        "indiebuild-api",
+        "indiebuild-admin-web",
+        "indiebuild-admin"
+      ]
+    },
+    "Principal": {
+      "description": "The caller a handler actually sees, after introspection. `runtime::authz::VerifiedActor`. The realm/audience pair is checked before this value exists, so a handler holding one cannot be serving the wrong plane.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "realm",
+        "audience",
+        "assuranceLevel"
+      ],
+      "properties": {
+        "subject": {
+          "description": "Subject claim, stable for the life of the account.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "realm": {
+          "$ref": "#/$defs/Realm"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "assuranceLevel": {
+          "description": "Authenticator assurance level. `runtime::authz::Introspection::assurance_level`.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "orgId": {
+          "description": "Org the token is scoped to. Absent for an individual account with no org.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "role": {
+          "description": "Role in `orgId`. Present exactly when `orgId` is.",
+          "type": "string",
+          "enum": [
+            "viewer",
+            "member",
+            "admin",
+            "owner"
+          ]
+        }
+      }
+    },
+    "OnboardingErrorCode": {
+      "description": "Why an onboarding step was refused. One variant per `runtime::tenancy::OnboardingError`, so a client can branch on the same set the domain does instead of matching on prose.",
+      "type": "string",
+      "enum": [
+        "no_seats_available",
+        "domain_not_allowed",
+        "invitation_not_open",
+        "invitation_address_mismatch",
+        "last_owner",
+        "role_escalation",
+        "invalid_email"
+      ]
+    },
+    "OnboardingFailure": {
+      "description": "The structured half of an onboarding refusal. `OnboardingError` carries payload on three of its variants; those are the optional fields here, and a client reads only the ones its `reason` defines.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/OnboardingErrorCode"
+        },
+        "purchased": {
+          "description": "Set when `reason` is `no_seats_available`.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "occupied": {
+          "description": "Set when `reason` is `no_seats_available`.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "reserved": {
+          "description": "Set when `reason` is `no_seats_available`.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "domain": {
+          "description": "Set when `reason` is `domain_not_allowed`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "actorRole": {
+          "description": "Set when `reason` is `role_escalation`: the role the caller holds.",
+          "type": "string",
+          "enum": [
+            "viewer",
+            "member",
+            "admin",
+            "owner"
+          ]
+        },
+        "grantedRole": {
+          "description": "Set when `reason` is `role_escalation`: the role they tried to grant.",
+          "type": "string",
+          "enum": [
+            "viewer",
+            "member",
+            "admin",
+            "owner"
+          ]
+        }
+      }
+    }
+  }
+}

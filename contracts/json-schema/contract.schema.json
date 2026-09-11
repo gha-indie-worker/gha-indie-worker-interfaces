@@ -1,0 +1,669 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/contract.schema.json",
+  "title": "GHA Indie Worker persisted contract",
+  "$comment": "HUMAN-AUTHORED PEER AUTHORITY. Not generated from contracts/typespec/main.tsp, and main.tsp is not generated from this. Neither is canonical. scripts/parity.mjs compares them and fails closed. Adding a model means editing BOTH files and adding a fixture; editing one alone is a gate failure, not a shortcut.",
+  "x-ores-namespace": "GhaIndieWorker",
+  "$defs": {
+    "AccountKind": {
+      "description": "Whether an account is a single person or an organization. `runtime::tenancy::AccountKind`.",
+      "type": "string",
+      "enum": ["individual", "organization"]
+    },
+    "Role": {
+      "description": "Membership role, ordered least to most privileged. `runtime::tenancy::Role`.",
+      "type": "string",
+      "enum": ["viewer", "member", "admin", "owner"]
+    },
+    "InvitationState": {
+      "description": "Lifecycle of an invitation. `runtime::tenancy::InvitationState`.",
+      "type": "string",
+      "enum": ["open", "accepted", "revoked", "expired"]
+    },
+    "Surface": {
+      "description": "A public surface of the product, by host label. `runtime::surface::Surface`.",
+      "type": "string",
+      "enum": ["app", "user", "org", "m", "api", "auth", "admin", "admin-api", "www"]
+    },
+    "RunStatus": {
+      "description": "Where a run, job or step is in its lifecycle.",
+      "type": "string",
+      "enum": ["queued", "in_progress", "completed"]
+    },
+    "RunConclusion": {
+      "description": "How a completed run, job or step ended. Absent while status is not `completed`.",
+      "type": "string",
+      "enum": ["success", "failure", "cancelled", "skipped", "timed_out", "action_required", "neutral"]
+    },
+    "RunnerState": {
+      "description": "Liveness of a registered runner.",
+      "type": "string",
+      "enum": ["offline", "idle", "busy"]
+    },
+    "RunnerArch": {
+      "description": "Runner CPU architecture. Both k8s clusters are aarch64; Cloud Run is x64.",
+      "type": "string",
+      "enum": ["x64", "arm64"]
+    },
+    "RunnerOs": {
+      "description": "Runner operating system.",
+      "type": "string",
+      "enum": ["linux", "macos", "windows"]
+    },
+    "IsolationMode": {
+      "description": "Job isolation, weakest to strongest. Dimension `iso` of the parity matrix.",
+      "type": "string",
+      "enum": ["process", "rootless", "microvm", "per_job_vm"]
+    },
+    "CacheScope": {
+      "description": "Blast radius of a cache entry. Dimension `cache.scoping-eviction`.",
+      "type": "string",
+      "enum": ["repository", "organization", "branch"]
+    },
+    "AttestationKind": {
+      "description": "Kind of supply-chain attestation attached to a run. Dimension `supply`.",
+      "type": "string",
+      "enum": ["slsa_provenance", "sbom", "sigstore_bundle"]
+    },
+    "ErrorCode": {
+      "description": "Protocol-level failure code. Byte-tagged on the wire; `runtime::session::ErrorCode`.",
+      "type": "string",
+      "enum": [
+        "unsupported_version",
+        "unauthorized",
+        "forbidden",
+        "protocol",
+        "rate_limited",
+        "not_found",
+        "going_away",
+        "timeout",
+        "internal"
+      ]
+    },
+    "Metric": {
+      "description": "Vector similarity metric. `analysis::embedding::Metric`.",
+      "type": "string",
+      "enum": ["dot", "cosine", "l2"]
+    },
+    "EmbeddingRole": {
+      "description": "Which side of a retrieval a vector was encoded for. `analysis::embedding::Role` — renamed here because the tenancy `Role` already owns that name in this namespace.",
+      "type": "string",
+      "enum": ["query", "document"]
+    },
+    "AnnStrategy": {
+      "description": "Index strategy for a comparison space. `analysis::embedding::AnnStrategy`.",
+      "type": "string",
+      "enum": ["halfvec_exact", "halfvec_mrl", "binary_full_rerank"]
+    },
+    "FindingSeverity": {
+      "description": "How much a finding matters.",
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+
+    "Org": {
+      "description": "A tenant. Every other row in this contract is reachable from exactly one org.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "orgs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["slug"]],
+      "required": ["id", "slug", "displayName", "kind", "primarySurface", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "slug": {
+          "description": "URL label. GitHub's own limit is 39 characters.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 39,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kind": { "$ref": "#/$defs/AccountKind" },
+        "primarySurface": {
+          "description": "Surface an org member lands on when signed in.",
+          "$ref": "#/$defs/Surface"
+        },
+        "apexDomain": {
+          "description": "Verified apex domain, when the org has proven one.",
+          "type": "string",
+          "maxLength": 253
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "User": {
+      "description": "A person. One row per human across every org they belong to.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "users",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["email"]],
+      "required": ["id", "email", "assuranceLevel", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "email": {
+          "description": "Normalized (lowercased, trimmed) address. RFC 5321 caps the path at 320 octets.",
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 320,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "assuranceLevel": {
+          "description": "Authenticator assurance level from `shared-auth` introspection. `runtime::authz::Introspection::assurance_level`.",
+          "type": "integer",
+          "x-ores-width": 32,
+          "minimum": 0,
+          "maximum": 4
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Membership": {
+      "description": "A user's role in one org. Deleting the last Owner is refused by `runtime::tenancy`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "memberships",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "userId"]],
+      "x-ores-indexes": [["orgId", "role"]],
+      "required": ["id", "orgId", "userId", "role", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "userId": { "type": "string", "format": "uuid", "x-ores-references": "User.id" },
+        "role": { "$ref": "#/$defs/Role" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Seats": {
+      "description": "Seat accounting for one org. `runtime::tenancy::Seats`: a seat is available when purchased > occupied + reserved.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "org_seats",
+      "x-ores-primary-key": ["orgId"],
+      "required": ["orgId", "purchased", "occupied", "reserved"],
+      "properties": {
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "purchased": { "type": "integer", "x-ores-width": 32, "minimum": 0, "maximum": 1000000 },
+        "occupied": { "type": "integer", "x-ores-width": 32, "minimum": 0, "maximum": 1000000 },
+        "reserved": {
+          "description": "Seats held by open invitations, so two invitations cannot spend one seat.",
+          "type": "integer",
+          "x-ores-width": 32,
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "Invitation": {
+      "description": "An outstanding invitation to join an org. `runtime::tenancy::Invitation`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "invitations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "email"]],
+      "x-ores-indexes": [["state", "expiresAt"]],
+      "required": ["id", "orgId", "email", "role", "state", "expiresAt", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 320,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+        },
+        "role": {
+          "description": "Role granted on acceptance. Never above the inviter's own role.",
+          "$ref": "#/$defs/Role"
+        },
+        "state": { "$ref": "#/$defs/InvitationState" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "JoinPolicy": {
+      "description": "How strangers may join one org. `runtime::tenancy::JoinPolicy`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "join_policies",
+      "x-ores-primary-key": ["orgId"],
+      "required": [
+        "orgId",
+        "verifiedDomains",
+        "domainJoinEnabled",
+        "restrictInvitationsToVerifiedDomains",
+        "defaultRole"
+      ],
+      "properties": {
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "verifiedDomains": {
+          "description": "Domains the org has proven it controls, lowercased and without a leading dot.",
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string" }
+        },
+        "domainJoinEnabled": { "type": "boolean" },
+        "restrictInvitationsToVerifiedDomains": { "type": "boolean" },
+        "defaultRole": { "$ref": "#/$defs/Role" }
+      }
+    },
+    "Workflow": {
+      "description": "A workflow definition tracked in a repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "workflows",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "repository", "path"]],
+      "required": ["id", "orgId", "repository", "path", "name", "defaultBranch", "enabled"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "repository": {
+          "description": "`owner/name`, as GitHub spells it.",
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 140,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "path": {
+          "description": "Path within the repository, conventionally `.github/workflows/<file>.yml`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "defaultBranch": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "Run": {
+      "description": "One execution of a workflow.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "runs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["workflowId", "createdAt"], ["status"]],
+      "required": [
+        "id",
+        "workflowId",
+        "orgId",
+        "runNumber",
+        "attempt",
+        "status",
+        "headSha",
+        "event",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "workflowId": { "type": "string", "format": "uuid", "x-ores-references": "Workflow.id" },
+        "orgId": {
+          "description": "Denormalized tenant, so every run query is tenant-scoped without a join.",
+          "type": "string",
+          "format": "uuid",
+          "x-ores-references": "Org.id"
+        },
+        "runNumber": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "attempt": { "type": "integer", "x-ores-width": 32, "minimum": 1, "maximum": 1000 },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "conclusion": {
+          "description": "Set exactly when `status` is `completed`.",
+          "$ref": "#/$defs/RunConclusion"
+        },
+        "headSha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]+$"
+        },
+        "event": {
+          "description": "Triggering event: `push`, `pull_request`, `schedule`, `workflow_dispatch`, …",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Job": {
+      "description": "One job of a run. Jobs of a run form the `needs` DAG; the edges live in `Job.needs`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "jobs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["runId", "startedAt"]],
+      "required": ["id", "runId", "name", "status", "isolation", "needs"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "conclusion": { "$ref": "#/$defs/RunConclusion" },
+        "runnerId": {
+          "description": "Runner that claimed the job. Absent while queued.",
+          "type": "string",
+          "format": "uuid",
+          "x-ores-references": "Runner.id"
+        },
+        "isolation": { "$ref": "#/$defs/IsolationMode" },
+        "needs": {
+          "description": "Names of jobs in the same run that must finish first.",
+          "type": "array",
+          "maxItems": 256,
+          "items": { "type": "string" }
+        },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Step": {
+      "description": "One step of a job, numbered from 1 in declaration order.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "steps",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["jobId", "number"]],
+      "required": ["id", "jobId", "number", "name", "status"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "jobId": { "type": "string", "format": "uuid", "x-ores-references": "Job.id" },
+        "number": { "type": "integer", "x-ores-width": 32, "minimum": 1, "maximum": 1000 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": { "$ref": "#/$defs/RunStatus" },
+        "conclusion": { "$ref": "#/$defs/RunConclusion" },
+        "usesRef": {
+          "description": "Action reference, which org policy requires be pinned to a 40-hex commit sha.",
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]+$"
+        }
+      }
+    },
+    "RunnerGroup": {
+      "description": "A pool of runners with its own repository scoping. Dimension `gov.runner-groups`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "runner_groups",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "name"]],
+      "required": ["id", "orgId", "name", "allowsPublicRepositories", "selectedRepositories"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "allowsPublicRepositories": { "type": "boolean" },
+        "selectedRepositories": {
+          "description": "`owner/name` repositories allowed to target this group. Empty means every repository in the org.",
+          "type": "array",
+          "maxItems": 500,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "Runner": {
+      "description": "A registered runner. Ephemeral runners execute one job and are destroyed.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "runners",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "name"]],
+      "x-ores-indexes": [["state"]],
+      "required": ["id", "orgId", "name", "os", "arch", "state", "ephemeral", "isolation", "labels"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "groupId": { "type": "string", "format": "uuid", "x-ores-references": "RunnerGroup.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "os": { "$ref": "#/$defs/RunnerOs" },
+        "arch": { "$ref": "#/$defs/RunnerArch" },
+        "state": { "$ref": "#/$defs/RunnerState" },
+        "ephemeral": { "type": "boolean" },
+        "isolation": { "$ref": "#/$defs/IsolationMode" },
+        "labels": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+        "lastSeenAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CacheEntry": {
+      "description": "A dependency-cache entry. `key` + `version` is the actions/cache restore identity.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "cache_entries",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["orgId", "scope", "key", "version"]],
+      "x-ores-indexes": [["orgId", "lastAccessedAt"]],
+      "required": ["id", "orgId", "scope", "key", "version", "sizeBytes", "createdAt", "lastAccessedAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "scope": { "$ref": "#/$defs/CacheScope" },
+        "key": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "version": {
+          "description": "Hash of the cache's declared inputs. 64 hex characters.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]+$"
+        },
+        "sizeBytes": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastAccessedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Artifact": {
+      "description": "A workflow artifact stored in the object-store backend. Dimension `art`.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "artifacts",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["runId", "name"]],
+      "x-ores-indexes": [["expiresAt"]],
+      "required": ["id", "runId", "name", "sizeBytes", "digest", "retentionDays", "expiresAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "sizeBytes": { "type": "integer", "x-ores-width": 64, "minimum": 0 },
+        "digest": {
+          "description": "Content digest, `sha256:` + 64 hex characters.",
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]+$"
+        },
+        "retentionDays": { "type": "integer", "x-ores-width": 32, "minimum": 1, "maximum": 400 },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Attestation": {
+      "description": "A supply-chain attestation over an artifact or image produced by a run.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "attestations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["subjectDigest"]],
+      "required": ["id", "runId", "kind", "subjectDigest", "bundle", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "kind": { "$ref": "#/$defs/AttestationKind" },
+        "subjectDigest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]+$"
+        },
+        "bundle": {
+          "description": "The DSSE envelope or Sigstore bundle, verbatim.",
+          "type": "string",
+          "format": "byte"
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ComparisonSpace": {
+      "description": "The twelve axes that make two vectors comparable. `analysis::embedding::ComparisonSpace`. Vectors from different spaces are never compared; every space ships disabled.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "comparison_spaces",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [
+        [
+          "tenant",
+          "entity",
+          "model",
+          "modelRevision",
+          "dimensions",
+          "metric",
+          "embeddingRole",
+          "promptProfile",
+          "chunkProfile",
+          "normalization",
+          "truncatedTo",
+          "contractVersion"
+        ]
+      ],
+      "required": [
+        "id",
+        "tenant",
+        "entity",
+        "model",
+        "modelRevision",
+        "dimensions",
+        "metric",
+        "embeddingRole",
+        "promptProfile",
+        "chunkProfile",
+        "normalization",
+        "contractVersion",
+        "annStrategy",
+        "enabled"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "tenant": {
+          "description": "Axis 1. Vectors never cross a tenant boundary, even within one model.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "entity": {
+          "description": "Axis 2. What is embedded: `run-log`, `workflow`, `ticket`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "model": {
+          "description": "Axis 3. Model identifier, exactly as the provider names it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "modelRevision": {
+          "description": "Axis 4. A silently re-trained model is a different space.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "dimensions": {
+          "description": "Axis 5. Native dimension before padding to the storage slot.",
+          "type": "integer",
+          "x-ores-width": 32,
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "metric": { "description": "Axis 6.", "$ref": "#/$defs/Metric" },
+        "embeddingRole": {
+          "description": "Axis 7. Query and document vectors are compared against each other, never within.",
+          "$ref": "#/$defs/EmbeddingRole"
+        },
+        "promptProfile": {
+          "description": "Axis 8. Instruction/prefix template applied before encoding.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "chunkProfile": {
+          "description": "Axis 9. Different chunking is different content.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "normalization": {
+          "description": "Axis 10. Post-encoding normalization: `l2`, `none`.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "truncatedTo": {
+          "description": "Axis 11. Matryoshka truncation width, when the stored vector is truncated.",
+          "type": "integer",
+          "x-ores-width": 32,
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "contractVersion": {
+          "description": "Axis 12. Contract version that produced the row.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "annStrategy": {
+          "description": "Enabling anything but `halfvec_exact` requires measured recall evidence.",
+          "$ref": "#/$defs/AnnStrategy"
+        },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "Finding": {
+      "description": "Something discovery surfaced about a run. Findings are evidence, never an action.",
+      "type": "object",
+      "additionalProperties": false,
+      "x-ores-table": "findings",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["orgId", "severity"]],
+      "required": [
+        "id",
+        "orgId",
+        "spaceId",
+        "severity",
+        "title",
+        "detail",
+        "fingerprint",
+        "score",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "orgId": { "type": "string", "format": "uuid", "x-ores-references": "Org.id" },
+        "spaceId": {
+          "type": "string",
+          "format": "uuid",
+          "x-ores-references": "ComparisonSpace.id"
+        },
+        "runId": { "type": "string", "format": "uuid", "x-ores-references": "Run.id" },
+        "severity": { "$ref": "#/$defs/FindingSeverity" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "fingerprint": {
+          "description": "Stable identity so the same finding is not reported twice.",
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]+$"
+        },
+        "score": {
+          "description": "Similarity that produced the finding, in [0, 1].",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

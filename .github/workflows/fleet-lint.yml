@@ -1,0 +1,167 @@
+name: fleet-lint
+
+# REUSABLE. Other repositories in the org call this workflow; they do not copy it.
+#
+#   jobs:
+#     lint:
+#       uses: gha-indie-worker/gha-indie-worker-interfaces/.github/workflows/fleet-lint.yml@main
+#       with: { rust: true, typescript: true, dart: false }
+#
+# One line per repo, one place to change the policy. A repo that copied the file
+# instead would drift the moment a lint is added here, and nobody would notice --
+# which is the same failure the two-authority contract model exists to prevent,
+# applied to CI configuration.
+#
+# Each `with:` flag defaults to false: a repo opts in to the lanes whose languages
+# it actually contains, so a Dart-free repo does not install the Dart SDK.
+
+on:
+  workflow_call:
+    inputs:
+      rust:
+        description: "Run rustfmt, clippy -D warnings, cargo-deny and cargo-audit."
+        type: boolean
+        default: false
+      typescript:
+        description: "Run Biome (lint + format) and tsc --noEmit."
+        type: boolean
+        default: false
+      dart:
+        description: "Run dart format --set-exit-if-changed and dart analyze --fatal-infos."
+        type: boolean
+        default: false
+      typespec:
+        description: "Run tsp format --check and tsp compile --warn-as-error."
+        type: boolean
+        default: false
+      json-schema:
+        description: "Compile every JSON Schema document under ajv strict mode."
+        type: boolean
+        default: false
+      dart-package-dir:
+        description: "Directory holding pubspec.yaml, when the Dart lane is on."
+        type: string
+        default: "."
+      rust-toolchain:
+        description: "Rust toolchain for the Rust lane."
+        type: string
+        default: "stable"
+      node-version:
+        type: string
+        default: "22"
+
+permissions:
+  contents: read
+
+jobs:
+  # Always on. Every repo in the fleet has workflows and shell in it, and these
+  # two lanes need no language toolchain at all, so there is no reason to gate them.
+  actions-and-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint (workflow semantics)
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+      - name: yamllint (the files as YAML)
+        run: |
+          pip install --quiet yamllint==1.35.1
+          yamllint --strict $(git ls-files '*.yml' '*.yaml')
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          mapfile -t files < <(git ls-files | xargs -r file --mime-type | awk -F: '/x-shellscript/ {print $1}')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no shell scripts in this repository"
+          else
+            printf '%s\n' "${files[@]}"
+            shellcheck "${files[@]}"
+          fi
+
+  rust:
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt --check
+        run: cargo fmt --all -- --check
+
+      # -D warnings is the whole point: a lint nobody has to act on is not a lint.
+      - name: clippy -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo-deny (licences, bans, sources, advisories)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      - name: cargo-audit (RustSec advisories)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ github.token }}
+
+  typescript:
+    if: inputs.typescript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+
+      # Biome is lint AND format in one pass; `ci` is the non-writing mode.
+      - name: biome ci
+        run: npx --no-install biome ci .
+
+      # Biome has no type information. This is the other half of the lane.
+      - name: tsc --noEmit
+        run: npx --no-install tsc --noEmit
+
+  dart:
+    if: inputs.dart
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.dart-package-dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+      - run: dart format --output=none --set-exit-if-changed .
+      - run: dart analyze --fatal-infos
+
+  contracts-lint:
+    if: inputs.typespec || inputs.json-schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci
+
+      - name: tsp format --check
+        if: inputs.typespec
+        run: npx --no-install tsp format --check "contracts/typespec/**/*.tsp"
+
+      # --warn-as-error: a warning in an authority is a failed build, not a log line.
+      - name: tsp compile --warn-as-error
+        if: inputs.typespec
+        run: npx --no-install tsp compile contracts/typespec/main.tsp --no-emit --warn-as-error
+
+      - name: ajv strict-mode compile
+        if: inputs.json-schema
+        run: node scripts/lint-schemas.mjs

@@ -1,0 +1,8 @@
+{
+  "id": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a9d",
+  "runId": "018f3a2e-5c7d-7a11-9b22-3c4d5e6f7a85",
+  "kind": "sbom",
+  "subjectDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "bundle": "RFNTRSBlbnZlbG9wZSBieXRlcw==",
+  "createdAt": "2026-03-01T12:07:35Z"
+}

@@ -1,0 +1,6 @@
+{
+  "kind": "error",
+  "id": 7,
+  "code": "forbidden",
+  "message": "the token is not scoped to this stream"
+}
