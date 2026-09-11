@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/build-log-stream/authored.schema.json",
+  "$defs": {
+    "GitHubOrgName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "GitHubRepoName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "GitHubId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "GitCommitSha": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "GitRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "StorageRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "SafeUnsignedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "ProcessExitCode": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "LogSidecarJobId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "LogSidecarProgram": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "PayloadHex": {
+      "type": "string",
+      "maxLength": 131072,
+      "pattern": "^[0-9a-f]*$"
+    },
+    "WireHex": {
+      "type": "string",
+      "maxLength": 131092,
+      "pattern": "^[0-9a-f]*$"
+    },
+    "BuildLogStream": {
+      "type": "string",
+      "enum": ["stdout", "stderr", "system"]
+    },
+    "BuildLogSource": {
+      "type": "string",
+      "enum": ["runner", "github-reconciliation"]
+    },
+    "BuildLogCompression": {
+      "type": "string",
+      "enum": ["none", "gzip", "zstd"]
+    },
+    "LogSidecarProtocol": {
+      "type": "string",
+      "enum": ["gha-indie-worker.log-sidecar.v1"]
+    },
+    "LogSidecarFrameMagic": {
+      "type": "string",
+      "enum": ["GHLG"]
+    },
+    "LogSidecarFrameStream": {
+      "type": "string",
+      "enum": ["stdout", "stderr"]
+    },
+    "LogSidecarStartEvent": {
+      "type": "string",
+      "enum": ["command_started"]
+    },
+    "LogSidecarTerminalEvent": {
+      "type": "string",
+      "enum": ["command_finished", "command_timed_out", "command_wait_failed"]
+    },
+    "LogSidecarFrameDescriptor": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "protocol": { "$ref": "#/$defs/LogSidecarProtocol" },
+        "magic": { "$ref": "#/$defs/LogSidecarFrameMagic" },
+        "version": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "streamId": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "stream": { "$ref": "#/$defs/LogSidecarFrameStream" },
+        "payloadLength": { "type": "integer", "minimum": 0, "maximum": 65536 }
+      },
+      "required": ["protocol", "magic", "version", "streamId", "stream", "payloadLength"]
+    },
+    "LogSidecarWireVector": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "frame": { "$ref": "#/$defs/LogSidecarFrameDescriptor" },
+        "payloadHex": { "$ref": "#/$defs/PayloadHex" },
+        "wireHex": { "$ref": "#/$defs/WireHex" }
+      },
+      "required": ["name", "frame", "payloadHex", "wireHex"]
+    },
+    "LogSidecarCommandStarted": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "schemaVersion": { "$ref": "#/$defs/LogSidecarProtocol" },
+        "event": { "$ref": "#/$defs/LogSidecarStartEvent" },
+        "atMs": { "$ref": "#/$defs/SafeUnsignedInteger" },
+        "jobId": {
+          "anyOf": [
+            { "$ref": "#/$defs/LogSidecarJobId" },
+            { "type": "null" }
+          ]
+        },
+        "program": { "$ref": "#/$defs/LogSidecarProgram" }
+      },
+      "required": ["schemaVersion", "event", "atMs", "jobId", "program"]
+    },
+    "LogSidecarCommandTerminal": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "schemaVersion": { "$ref": "#/$defs/LogSidecarProtocol" },
+        "event": { "$ref": "#/$defs/LogSidecarTerminalEvent" },
+        "atMs": { "$ref": "#/$defs/SafeUnsignedInteger" },
+        "jobId": {
+          "anyOf": [
+            { "$ref": "#/$defs/LogSidecarJobId" },
+            { "type": "null" }
+          ]
+        },
+        "program": { "$ref": "#/$defs/LogSidecarProgram" },
+        "success": { "type": "boolean" },
+        "exitCode": {
+          "anyOf": [
+            { "$ref": "#/$defs/ProcessExitCode" },
+            { "type": "null" }
+          ]
+        },
+        "droppedFrames": { "$ref": "#/$defs/SafeUnsignedInteger" },
+        "droppedBytes": { "$ref": "#/$defs/SafeUnsignedInteger" }
+      },
+      "required": [
+        "schemaVersion",
+        "event",
+        "atMs",
+        "jobId",
+        "program",
+        "success",
+        "exitCode",
+        "droppedFrames",
+        "droppedBytes"
+      ]
+    },
+    "BuildLogIdentity": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "organization": { "$ref": "#/$defs/GitHubOrgName" },
+        "repository": { "$ref": "#/$defs/GitHubRepoName" },
+        "workflow": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "runId": { "$ref": "#/$defs/GitHubId" },
+        "runAttempt": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "jobId": { "$ref": "#/$defs/GitHubId" },
+        "headSha": { "$ref": "#/$defs/GitCommitSha" },
+        "gitRef": { "$ref": "#/$defs/GitRef" },
+        "stepName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "runnerName": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      "required": [
+        "organization",
+        "repository",
+        "workflow",
+        "runId",
+        "runAttempt",
+        "jobId",
+        "headSha",
+        "gitRef"
+      ]
+    },
+    "BuildLogRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "identity": { "$ref": "#/$defs/BuildLogIdentity" },
+        "stream": { "$ref": "#/$defs/BuildLogStream" },
+        "source": { "$ref": "#/$defs/BuildLogSource" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "offsetBytes": { "type": "integer", "minimum": 0 },
+        "body": { "type": "string", "maxLength": 65536 },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "redacted": { "type": "boolean" }
+      },
+      "required": [
+        "identity",
+        "stream",
+        "source",
+        "sequence",
+        "offsetBytes",
+        "body",
+        "observedAt",
+        "redacted"
+      ]
+    },
+    "BuildLogChunkManifest": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "identity": { "$ref": "#/$defs/BuildLogIdentity" },
+        "firstSequence": { "type": "integer", "minimum": 0 },
+        "lastSequence": { "type": "integer", "minimum": 0 },
+        "byteCount": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/Sha256Hex" },
+        "compression": { "$ref": "#/$defs/BuildLogCompression" },
+        "objectRef": { "$ref": "#/$defs/StorageRef" },
+        "hotStoreRef": { "$ref": "#/$defs/StorageRef" },
+        "storedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "identity",
+        "firstSequence",
+        "lastSequence",
+        "byteCount",
+        "sha256",
+        "compression",
+        "objectRef",
+        "storedAt"
+      ]
+    },
+    "BuildLogGap": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "identity": { "$ref": "#/$defs/BuildLogIdentity" },
+        "expectedSequence": { "type": "integer", "minimum": 0 },
+        "receivedSequence": { "type": "integer", "minimum": 0 },
+        "detectedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["identity", "expectedSequence", "receivedSequence", "detectedAt"]
+    },
+    "BuildLogTerminalReconciliation": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "properties": {
+        "identity": { "$ref": "#/$defs/BuildLogIdentity" },
+        "complete": { "type": "boolean" },
+        "downloadedAt": { "type": "string", "format": "date-time" },
+        "githubArchiveSha256": { "$ref": "#/$defs/Sha256Hex" },
+        "highestSequence": { "type": "integer", "minimum": 0 },
+        "gapCount": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["identity", "complete", "downloadedAt", "githubArchiveSha256", "gapCount"]
+    }
+  }
+}

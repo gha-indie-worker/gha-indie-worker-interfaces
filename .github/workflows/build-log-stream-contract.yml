@@ -1,0 +1,153 @@
+name: build-log-stream-contract
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/build-log-stream/**'
+      - 'src/build_log.rs'
+      - 'src/lib.rs'
+      - 'tests/build_log_contract.rs'
+      - '.github/workflows/build-log-stream-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/build-log-stream/**'
+      - 'src/build_log.rs'
+      - 'src/lib.rs'
+      - 'tests/build_log_contract.rs'
+      - '.github/workflows/build-log-stream-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-log-stream-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TJSV_REVISION: a4b731fbf82c4d162abd74fd03758fa32bb76176
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/a4b731fbf82c4d162abd74fd03758fa32bb76176.tar.gz
+
+jobs:
+  peer-authority:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Set up Node 22 for TJSV
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Set up Rust 1.90
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.90.0'
+          components: rustfmt, clippy
+
+      - name: Prove exact revision
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Compare independent TypeSpec and JSON Schema authorities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/tjsv/positive
+          npx --yes --package="$TJSV_PACKAGE" tjsv check \
+            --typespec=contracts/build-log-stream/main.tsp \
+            --schema=contracts/build-log-stream/authored.schema.json \
+            --instances=contracts/build-log-stream/instances \
+            --report=target/tjsv/positive/report.json \
+            --sarif=target/tjsv/positive/report.sarif \
+            --output-dir=target/tjsv/positive/generated-schema-b \
+            --max-probes=256 \
+            --int64-strategy=number \
+            --seal-object-schemas=true
+
+      - name: Create one intentionally drifted sidecar peer schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/tjsv/drift
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const source = 'contracts/build-log-stream/authored.schema.json';
+          const target = 'target/tjsv/drift/authored.schema.json';
+          const document = JSON.parse(fs.readFileSync(source, 'utf8'));
+          const protocol = document.$defs.LogSidecarProtocol.enum;
+          if (protocol.length !== 1 || protocol[0] !== 'gha-indie-worker.log-sidecar.v1') {
+            throw new Error('unexpected sidecar protocol authority');
+          }
+          protocol[0] = 'gha-indie-worker.log-sidecar.v2';
+          fs.writeFileSync(target, JSON.stringify(document, null, 2) + '\n');
+          NODE
+
+      - name: Prove TJSV stops on live-sidecar authority drift
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npx --yes --package="$TJSV_PACKAGE" tjsv check \
+            --typespec=contracts/build-log-stream/main.tsp \
+            --schema=target/tjsv/drift/authored.schema.json \
+            --instances=contracts/build-log-stream/instances \
+            --report=target/tjsv/drift/report.json \
+            --sarif=target/tjsv/drift/report.sarif \
+            --output-dir=target/tjsv/drift/generated-schema-b \
+            --max-probes=256 \
+            --int64-strategy=number \
+            --seal-object-schemas=true \
+            --quiet
+          status=$?
+          set -e
+          test "$status" -eq 2
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync('target/tjsv/drift/report.json', 'utf8'));
+          if (report.status !== 'stopped_for_evaluation') {
+            throw new Error(`expected stopped_for_evaluation, got ${report.status}`);
+          }
+          const findings = Array.isArray(report.findings) ? report.findings : [];
+          if (!findings.some((finding) =>
+            String(finding.ruleId ?? finding.rule ?? '').includes('semantic-mismatch') ||
+            String(finding.message ?? '').includes('LogSidecarProtocol') ||
+            String(finding.message ?? '').includes('log-sidecar')
+          )) {
+            throw new Error('intentional sidecar protocol drift was not attributable in TJSV findings');
+          }
+          NODE
+
+      - name: Check Rust projection formatting
+        run: rustfmt --edition 2021 --check --config skip_children=true src/build_log.rs src/lib.rs tests/build_log_contract.rs
+
+      - name: Check Rust projection with Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test Rust projection and exact wire vectors
+        run: cargo test --all-targets
+
+      - name: Prove authored authorities were not rewritten
+        shell: bash
+        run: git diff --exit-code -- contracts/build-log-stream
+
+      - name: Upload deterministic parity evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-log-stream-tjsv-${{ github.sha }}
+          path: target/tjsv/
+          if-no-files-found: error
+          retention-days: 30

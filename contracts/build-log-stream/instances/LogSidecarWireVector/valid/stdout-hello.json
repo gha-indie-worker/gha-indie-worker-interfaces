@@ -1,0 +1,13 @@
+{
+  "name": "stdout-hello",
+  "frame": {
+    "protocol": "gha-indie-worker.log-sidecar.v1",
+    "magic": "GHLG",
+    "version": 1,
+    "streamId": 1,
+    "stream": "stdout",
+    "payloadLength": 6
+  },
+  "payloadHex": "68656c6c6f0a",
+  "wireHex": "47484c4701010000000668656c6c6f0a"
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "gha-indie-worker.build-log-metadata/v1",
+  "event": "dropped",
+  "jobId": "worker-global",
+  "stream": "worker",
+  "sequence": 12,
+  "byteLength": 0,
+  "timestamp": "2026-09-09T19:45:01Z",
+  "droppedChunks": 3,
+  "droppedBytes": 131072
+}
