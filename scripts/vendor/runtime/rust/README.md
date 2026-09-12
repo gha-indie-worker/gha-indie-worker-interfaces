@@ -8,7 +8,7 @@ the generated module is what makes those paths resolve — and it means the
 transport is compiled against *your* route map's operations, not against a
 lowest-common-denominator copy.
 
-```
+```text
 src/
   lib.rs            pub use generated::*;  mod opto_sync;
   generated.rs      <- ridl generate --lang rust
