@@ -17,6 +17,8 @@ Git does **not** persist the write bit (only the executable bit). A fresh clone 
 writable until you re-freeze:
 
 ```sh
+python3 scripts/check-generated-contract.py --freeze --require-readonly
+# or, without Python:
 find generated -type f ! -name 'README.md' ! -name 'readme.md' -exec chmod a-w {} +
 ```
 
