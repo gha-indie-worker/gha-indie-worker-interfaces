@@ -1,0 +1,10 @@
+{
+  "id": "66666666-6666-4666-8666-666666666666",
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "lease_generation": 1,
+  "revision_sha": "e947a78f0b3e1c91ce930c02cf25b57f3e919e8f",
+  "context": "indiebuild.dev/ci",
+  "state": "success",
+  "external_id": "indiebuild:job:11111111-1111-4111-8111-111111111111:g1",
+  "published_at": "2026-09-14T21:34:05Z"
+}
