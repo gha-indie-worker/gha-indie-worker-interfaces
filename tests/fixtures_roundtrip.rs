@@ -1,6 +1,19 @@
-//! Drive every JSON fixture through the hand-written Rust wire mirrors.
-//! TypeSpec and JSON Schema remain the peer authorities; these tests only prove
-//! the ergonomic Rust surface cannot silently drift from the JSON wire shape.
+//! Every fixture in `contracts/fixtures/` is driven through serde.
+//!
+//! * `valid/` must deserialize, and `to_value(parse(raw)) == parse_value(raw)` —
+//!   which is what actually proves `#[serde(rename_all = "camelCase")]` and every
+//!   field name in `src/v1/` match the JSON Schema authority.
+//! * `invalid/*.json` (top level) must FAIL to deserialize. Those fixtures break a
+//!   structural rule — a missing required field, a wrong scalar type, an unknown
+//!   enum value, or an extra property that `deny_unknown_fields` rejects.
+//! * `invalid/schema-only/*.json` must SUCCEED here: they are well-formed
+//!   documents that only violate a value bound (`maxLength`, `minimum`, a
+//!   `pattern`, a `oneOf` branch). serde does not enforce bounds; the JSON Schema
+//!   validator does, and `npm run validate:fixtures` is what rejects them.
+//!
+//! The dispatch table below must cover every non-enum `$defs` entry of every
+//! slice — `table_covers_every_model` fails the build when a model is added to an
+//! authority without a Rust mirror.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,6 +39,7 @@ fn check<T: DeserializeOwned + Serialize>(raw: &str) -> Result<Value, String> {
     Ok(once)
 }
 
+/// `(slice, model, checker)` for every model in the JSON Schema authority.
 fn table() -> Vec<(&'static str, &'static str, Check)> {
     vec![
         ("identity", "Org", check::<identity::Org> as Check),
@@ -33,10 +47,26 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("identity", "OrgMember", check::<identity::OrgMember>),
         ("identity", "Invitation", check::<identity::Invitation>),
         ("identity", "Seat", check::<identity::Seat>),
-        ("onboarding", "OrgOnboardingTransition", check::<onboarding::OrgOnboardingTransition>),
-        ("onboarding", "UserOnboardingTransition", check::<onboarding::UserOnboardingTransition>),
-        ("onboarding", "AdvanceRequest", check::<onboarding::AdvanceRequest>),
-        ("onboarding", "AdvanceResponse", check::<onboarding::AdvanceResponse>),
+        (
+            "onboarding",
+            "OrgOnboardingTransition",
+            check::<onboarding::OrgOnboardingTransition>,
+        ),
+        (
+            "onboarding",
+            "UserOnboardingTransition",
+            check::<onboarding::UserOnboardingTransition>,
+        ),
+        (
+            "onboarding",
+            "AdvanceRequest",
+            check::<onboarding::AdvanceRequest>,
+        ),
+        (
+            "onboarding",
+            "AdvanceResponse",
+            check::<onboarding::AdvanceResponse>,
+        ),
         ("runs", "Plan", check::<runs::Plan>),
         ("runs", "Run", check::<runs::Run>),
         ("runs", "Job", check::<runs::Job>),
@@ -49,19 +79,63 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("workers", "Profile", check::<workers::Profile>),
         ("queue", "QueueJob", check::<queue::QueueJob>),
         ("queue", "JobLease", check::<queue::JobLease>),
-        ("queue", "HostedRunObservation", check::<queue::HostedRunObservation>),
-        ("queue", "ExecutionEvidence", check::<queue::ExecutionEvidence>),
-        ("queue", "CheckPublication", check::<queue::CheckPublication>),
-        ("webhooks", "GitHubDelivery", check::<webhooks::GitHubDelivery>),
-        ("webhooks", "RegistryImageEvent", check::<webhooks::RegistryImageEvent>),
+        (
+            "queue",
+            "HostedRunObservation",
+            check::<queue::HostedRunObservation>,
+        ),
+        (
+            "queue",
+            "ExecutionEvidence",
+            check::<queue::ExecutionEvidence>,
+        ),
+        (
+            "queue",
+            "CheckPublication",
+            check::<queue::CheckPublication>,
+        ),
+        (
+            "webhooks",
+            "GitHubDelivery",
+            check::<webhooks::GitHubDelivery>,
+        ),
+        (
+            "webhooks",
+            "RegistryImageEvent",
+            check::<webhooks::RegistryImageEvent>,
+        ),
         ("chat", "ChatSession", check::<chat::ChatSession>),
         ("chat", "ChatMessage", check::<chat::ChatMessage>),
-        ("embeddings", "ComparisonSpace", check::<embeddings::ComparisonSpace>),
-        ("embeddings", "EmbeddingRecord", check::<embeddings::EmbeddingRecord>),
-        ("embeddings", "IndexRequest", check::<embeddings::IndexRequest>),
-        ("embeddings", "SearchRequest", check::<embeddings::SearchRequest>),
-        ("embeddings", "SearchResponse", check::<embeddings::SearchResponse>),
-        ("embeddings", "RegressionFinding", check::<embeddings::RegressionFinding>),
+        (
+            "embeddings",
+            "ComparisonSpace",
+            check::<embeddings::ComparisonSpace>,
+        ),
+        (
+            "embeddings",
+            "EmbeddingRecord",
+            check::<embeddings::EmbeddingRecord>,
+        ),
+        (
+            "embeddings",
+            "IndexRequest",
+            check::<embeddings::IndexRequest>,
+        ),
+        (
+            "embeddings",
+            "SearchRequest",
+            check::<embeddings::SearchRequest>,
+        ),
+        (
+            "embeddings",
+            "SearchResponse",
+            check::<embeddings::SearchResponse>,
+        ),
+        (
+            "embeddings",
+            "RegressionFinding",
+            check::<embeddings::RegressionFinding>,
+        ),
         ("embeddings", "AlertRule", check::<embeddings::AlertRule>),
         ("embeddings", "MatchEvent", check::<embeddings::MatchEvent>),
         ("sync", "CausalEnvelope", check::<sync::CausalEnvelope>),
@@ -70,7 +144,11 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("transport", "WsEvent", check::<transport::WsEvent>),
         ("transport", "TcpFrame", check::<transport::TcpFrame>),
         ("errors", "Problem", check::<errors::Problem>),
-        ("errors", "ProblemViolation", check::<errors::ProblemViolation>),
+        (
+            "errors",
+            "ProblemViolation",
+            check::<errors::ProblemViolation>,
+        ),
     ]
 }
 
@@ -138,11 +216,19 @@ fn valid_fixtures_round_trip_byte_for_byte_in_value_space() {
                 .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
             let produced = checker(&slice, &model_of(&path))(&raw)
                 .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()));
-            assert_eq!(original, produced, "{} did not survive serde unchanged", path.display());
+            assert_eq!(
+                original,
+                produced,
+                "{} did not survive serde unchanged",
+                path.display()
+            );
             checked += 1;
         }
     }
-    assert!(checked >= 20, "expected a real fixture corpus, saw {checked}");
+    assert!(
+        checked >= 20,
+        "expected a real fixture corpus, saw {checked}"
+    );
 }
 
 #[test]
@@ -151,8 +237,9 @@ fn structurally_invalid_fixtures_are_rejected_by_serde() {
     for slice in slices() {
         for path in json_files(&fixtures_root().join(&slice).join("invalid"), false) {
             let raw = fs::read_to_string(&path).unwrap();
+            let result = checker(&slice, &model_of(&path))(&raw);
             assert!(
-                checker(&slice, &model_of(&path))(&raw).is_err(),
+                result.is_err(),
                 "{} parsed successfully but lives in invalid/ — move it to invalid/schema-only/ if it only breaks a value bound",
                 path.display()
             );
@@ -166,7 +253,10 @@ fn structurally_invalid_fixtures_are_rejected_by_serde() {
 fn schema_only_invalid_fixtures_still_parse() {
     let mut checked = 0;
     for slice in slices() {
-        let dir = fixtures_root().join(&slice).join("invalid").join("schema-only");
+        let dir = fixtures_root()
+            .join(&slice)
+            .join("invalid")
+            .join("schema-only");
         for path in json_files(&dir, false) {
             let raw = fs::read_to_string(&path).unwrap();
             let result = checker(&slice, &model_of(&path))(&raw);
@@ -204,13 +294,15 @@ fn table_covers_every_model_in_every_authority() {
 }
 
 #[test]
-fn every_fixture_slice_has_a_valid_worked_example() {
+fn every_model_has_at_least_one_valid_fixture() {
     let mut covered: BTreeSet<(String, String)> = BTreeSet::new();
     for slice in slices() {
         for path in json_files(&fixtures_root().join(&slice).join("valid"), false) {
             covered.insert((slice.clone(), model_of(&path)));
         }
     }
+    // Not every model needs a fixture yet, but the ones that do must name a real
+    // model, and each slice must have at least one worked example.
     for (slice, model) in &covered {
         assert!(
             table().iter().any(|(s, m, _)| s == slice && m == model),
@@ -218,7 +310,10 @@ fn every_fixture_slice_has_a_valid_worked_example() {
         );
     }
     for slice in slices() {
-        assert!(covered.iter().any(|(s, _)| *s == slice), "slice {slice} has no valid fixture");
+        assert!(
+            covered.iter().any(|(s, _)| *s == slice),
+            "slice {slice} has no valid fixture"
+        );
     }
 }
 
@@ -226,11 +321,12 @@ fn every_fixture_slice_has_a_valid_worked_example() {
 fn onboarding_transition_tables_match_the_json_schema_authority() {
     let doc: Value = serde_json::from_str(schemas::ONBOARDING).unwrap();
     let declared = &doc["x-ores-transitions"];
+
     let wire = |state: &Value| state.as_str().unwrap().to_string();
 
     for state in onboarding::OrgOnboardingState::ALL {
         let key = serde_json::to_value(state).unwrap();
-        let mut listed: Vec<String> = declared["org"][wire(&key)]
+        let listed: Vec<String> = declared["org"][wire(&key)]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no org edges for {state:?}"))
             .iter()
@@ -241,14 +337,15 @@ fn onboarding_transition_tables_match_the_json_schema_authority() {
             .iter()
             .map(|s| wire(&serde_json::to_value(s).unwrap()))
             .collect();
-        listed.sort();
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
         code.sort();
-        assert_eq!(code, listed, "org edges for {state:?}");
+        assert_eq!(code, listed_sorted, "org edges for {state:?}");
     }
 
     for state in onboarding::UserOnboardingState::ALL {
         let key = serde_json::to_value(state).unwrap();
-        let mut listed: Vec<String> = declared["user"][wire(&key)]
+        let listed: Vec<String> = declared["user"][wire(&key)]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no user edges for {state:?}"))
             .iter()
@@ -259,9 +356,10 @@ fn onboarding_transition_tables_match_the_json_schema_authority() {
             .iter()
             .map(|s| wire(&serde_json::to_value(s).unwrap()))
             .collect();
-        listed.sort();
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
         code.sort();
-        assert_eq!(code, listed, "user edges for {state:?}");
+        assert_eq!(code, listed_sorted, "user edges for {state:?}");
     }
 }
 
@@ -271,7 +369,7 @@ fn run_status_transition_table_matches_the_json_schema_authority() {
     let declared = &doc["x-ores-transitions"]["runStatus"];
     for status in runs::RunStatus::ALL {
         let key = serde_json::to_value(status).unwrap();
-        let mut listed: Vec<String> = declared[key.as_str().unwrap()]
+        let listed: Vec<String> = declared[key.as_str().unwrap()]
             .as_array()
             .unwrap_or_else(|| panic!("schema has no edges for {status:?}"))
             .iter()
@@ -280,10 +378,17 @@ fn run_status_transition_table_matches_the_json_schema_authority() {
         let mut code: Vec<String> = status
             .allowed_next()
             .iter()
-            .map(|s| serde_json::to_value(s).unwrap().as_str().unwrap().to_string())
+            .map(|s| {
+                serde_json::to_value(s)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
             .collect();
-        listed.sort();
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
         code.sort();
-        assert_eq!(code, listed, "run status edges for {status:?}");
+        assert_eq!(code, listed_sorted, "run status edges for {status:?}");
     }
 }
