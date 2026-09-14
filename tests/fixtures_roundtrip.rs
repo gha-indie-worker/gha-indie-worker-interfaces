@@ -80,11 +80,7 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("queue", "QueueJob", check::<queue::QueueJob>),
         ("queue", "JobLease", check::<queue::JobLease>),
         ("queue", "ClaimReceipt", check::<queue::ClaimReceipt>),
-        (
-            "queue",
-            "JobSupersession",
-            check::<queue::JobSupersession>,
-        ),
+        ("queue", "JobSupersession", check::<queue::JobSupersession>),
         (
             "webhooks",
             "GitHubDelivery",
