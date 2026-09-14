@@ -1,0 +1,14 @@
+{
+  "id": "44444444-4444-4444-8444-444444444444",
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "repository": "ORESoftware/ores-cli",
+  "revision_sha": "e947a78f0b3e1c91ce930c02cf25b57f3e919e8f",
+  "github_run_id": 34899096479,
+  "github_job_id": 104160432019,
+  "status": "completed",
+  "conclusion": "failure",
+  "step_count": 0,
+  "classification": "zero_step_runner_admission_failure",
+  "admission_reason": "budget_exhausted",
+  "observed_at": "2026-09-14T21:32:00Z"
+}

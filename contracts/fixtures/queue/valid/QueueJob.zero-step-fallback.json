@@ -1,0 +1,17 @@
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "repository": "ORESoftware/ores-cli",
+  "revision_sha": "e947a78f0b3e1c91ce930c02cf25b57f3e919e8f",
+  "workflow_path": ".github/workflows/ci.yml",
+  "profile": "rust-verify",
+  "attempt": 1,
+  "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "queued",
+  "priority": 900,
+  "required_os": "macos",
+  "required_arch": "arm64",
+  "required_runtime": "host",
+  "required_capabilities": ["rust", "ores-compose"],
+  "created_at": "2026-09-14T21:30:00Z",
+  "available_at": "2026-09-14T21:30:00Z"
+}

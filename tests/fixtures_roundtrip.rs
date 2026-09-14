@@ -20,8 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gha_indie_worker_interfaces::v1::{
-    chat, embeddings, errors, identity, onboarding, runs, schemas, sync, transport, webhooks,
-    workers,
+    chat, embeddings, errors, identity, onboarding, queue, runs, schemas, sync, transport,
+    webhooks, workers,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -77,6 +77,23 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("workers", "Capability", check::<workers::Capability>),
         ("workers", "Heartbeat", check::<workers::Heartbeat>),
         ("workers", "Profile", check::<workers::Profile>),
+        ("queue", "QueueJob", check::<queue::QueueJob>),
+        ("queue", "JobLease", check::<queue::JobLease>),
+        (
+            "queue",
+            "HostedRunObservation",
+            check::<queue::HostedRunObservation>,
+        ),
+        (
+            "queue",
+            "ExecutionEvidence",
+            check::<queue::ExecutionEvidence>,
+        ),
+        (
+            "queue",
+            "CheckPublication",
+            check::<queue::CheckPublication>,
+        ),
         (
             "webhooks",
             "GitHubDelivery",
