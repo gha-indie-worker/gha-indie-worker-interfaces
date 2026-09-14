@@ -43,6 +43,18 @@ cargo test                       # the same fixtures through serde
 runner lane. `schema/v1/workerlease.json` and `src/protocol.rs` are the earlier
 surface and are unchanged.
 
+## HTTP route maps (Route IDL v2)
+
+Operation keys for the worker, clone-server and executor-router HTTP surfaces live in
+`route-maps/*.route-map.json` (schema_version 2.0.0, listed in `ridl.json`). Each map
+carries a type layer, and the vendored `ridl` generator (`scripts/vendor/ridl`) emits
+typed route clients from it, so frontend code uses operation keys instead of path
+strings. `python3 scripts/check-route-sync.py --root .` (Python 3.10+, standard
+library only) validates the maps, keeps them byte-identical to the lib-core copies,
+and checks handler registrations when sources are configured. The v1
+`api.route-map.json` / `generate-routes.py` lane is retired; its operations are all
+present in `worker.route-map.json`.
+
 ## IndieBuild BYOC / private SaaS
 
 IndieBuild can keep its hosted control plane while running the execution data
