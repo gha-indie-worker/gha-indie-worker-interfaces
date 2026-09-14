@@ -27,6 +27,7 @@ pub const IDENTITY: &str = include_str!("../../contracts/json-schema/identity.sc
 pub const ONBOARDING: &str = include_str!("../../contracts/json-schema/onboarding.schema.json");
 pub const RUNS: &str = include_str!("../../contracts/json-schema/runs.schema.json");
 pub const WORKERS: &str = include_str!("../../contracts/json-schema/workers.schema.json");
+pub const QUEUE: &str = include_str!("../../contracts/json-schema/queue.schema.json");
 pub const WEBHOOKS: &str = include_str!("../../contracts/json-schema/webhooks.schema.json");
 pub const CHAT: &str = include_str!("../../contracts/json-schema/chat.schema.json");
 pub const EMBEDDINGS: &str = include_str!("../../contracts/json-schema/embeddings.schema.json");
@@ -55,6 +56,11 @@ pub const ALL: &[Slice] = &[
         name: "workers",
         namespace: "GhaIndieWorker.V1.Workers",
         schema: WORKERS,
+    },
+    Slice {
+        name: "queue",
+        namespace: "GhaIndieWorker.V1.Queue",
+        schema: QUEUE,
     },
     Slice {
         name: "webhooks",
@@ -151,7 +157,8 @@ mod tests {
     #[test]
     fn lookup_by_name() {
         assert_eq!(schema_for("runs"), Some(RUNS));
+        assert_eq!(schema_for("queue"), Some(QUEUE));
         assert_eq!(schema_for("nope"), None);
-        assert_eq!(ALL.len(), 10);
+        assert_eq!(ALL.len(), 11);
     }
 }
