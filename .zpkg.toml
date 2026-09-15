@@ -1,8 +1,8 @@
-name = "gha-indie-worker-interfaces"
-kind = "interfaces"
-version = "0.1.0"
-
+[package]
 org = "gha-indie-worker"
+name = "gha-indie-worker-interfaces"
+version = "0.1.0"
+kind = "contracts"
 language = "rust"
 
 [dev-dependencies]
