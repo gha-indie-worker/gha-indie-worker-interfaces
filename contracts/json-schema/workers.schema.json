@@ -67,7 +67,7 @@
         "workerId": { "type": "string", "format": "uuid", "x-ores-references": "Worker.id" },
         "observedAt": { "type": "string", "format": "date-time" },
         "activeJobs": { "type": "integer", "minimum": 0, "maximum": 64 },
-        "queueDepth": { "type": "integer", "minimum": 0 },
+        "queueDepth": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
         "loadAverage": { "type": "number", "minimum": 0 },
         "version": { "type": "string", "minLength": 1, "maxLength": 32 }
       }
