@@ -8,5 +8,5 @@ language = "rust"
 vcs = "git"
 url = "https://github.com/gha-indie-worker/gha-indie-worker-interfaces"
 
-[dev-dependencies]
+[dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"
