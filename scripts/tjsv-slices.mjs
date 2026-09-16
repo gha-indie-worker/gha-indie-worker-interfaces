@@ -57,9 +57,9 @@ if (unknown.length) {
   process.exit(1);
 }
 
-// Current reviewed TJSV main: language/runtime boundary lockstep + fail-closed
-// multi-file reference normalization. Keep this as an exact 40-char commit.
-const tjsvRevision = 'a4b731fbf82c4d162abd74fd03758fa32bb76176';
+// Current reviewed TJSV main. Keep this as an exact 40-char commit so contract
+// evidence cannot drift under an unchanged IndieBuild source revision.
+const tjsvRevision = '7b1e79a32b89006a6eb6642ccd71ef25ffac0103';
 const tjsvPackage = process.env.TJSV_PACKAGE
   ?? `https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsvRevision}.tar.gz`;
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
