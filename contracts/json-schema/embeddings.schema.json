@@ -139,8 +139,8 @@
         "requestId": { "type": "string", "format": "uuid", "x-ores-references": "SearchRequest.id" },
         "matchedEntityIds": { "type": "array", "items": { "type": "string" }, "maxItems": 1000 },
         "scores": { "type": "array", "items": { "type": "number" }, "maxItems": 1000 },
-        "prefilterHits": { "type": "integer", "minimum": 0 },
-        "elapsedMillis": { "type": "integer", "minimum": 0 },
+        "prefilterHits": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "elapsedMillis": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
         "truncated": { "type": "boolean" },
         "respondedAt": { "type": "string", "format": "date-time" }
       }
@@ -163,7 +163,7 @@
         "coefficient": { "type": "number", "minimum": -1, "maximum": 1 },
         "pValue": { "type": "number", "minimum": 0, "maximum": 1 },
         "window": { "type": "string", "minLength": 1, "maxLength": 32 },
-        "sampleN": { "type": "integer", "minimum": 1 },
+        "sampleN": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "detectedAt": { "type": "string", "format": "date-time" }
       }
     },
@@ -184,7 +184,7 @@
         "severity": { "$ref": "#/$defs/AlertSeverity" },
         "thresholdCoefficient": { "type": "number", "minimum": -1, "maximum": 1 },
         "maxPValue": { "type": "number", "minimum": 0, "maximum": 1 },
-        "minSampleN": { "type": "integer", "minimum": 1 },
+        "minSampleN": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "enabled": { "type": "boolean" },
         "notifyChannels": { "type": "array", "items": { "type": "string" }, "maxItems": 16 },
         "createdAt": { "type": "string", "format": "date-time" }
