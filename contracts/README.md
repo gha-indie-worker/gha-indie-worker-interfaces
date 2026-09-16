@@ -19,7 +19,7 @@ Toolkit: [`ORESoftware/ores-contracts`](https://github.com/ORESoftware/ores-cont
 ## Layout
 
 | path | what it is |
-|---|---|
+| --- | --- |
 | `contracts/typespec/<slice>.tsp` | authority A, hand-authored |
 | `contracts/typespec/ores.tsp` | vendored decorator declarations (`@Ores.table`, `@Ores.unique`, `@Ores.index`, `@Ores.references`) plus the `uuid` scalar and the `json` alias |
 | `contracts/typespec/ores-decorators.js` | the JS runtime those `extern dec` declarations need so `tsp compile` accepts them |
@@ -37,7 +37,7 @@ compile`. `npm run contracts:check:all` sweeps all ten.
 ## Slices
 
 | slice | namespace | what it owns |
-|---|---|---|
+| --- | --- | --- |
 | `identity` | `GhaIndieWorker.V1.Identity` | Org, User, OrgMember, Invitation, Seat, `Role` |
 | `onboarding` | `GhaIndieWorker.V1.Onboarding` | the org and user onboarding state machines and their advance request/response |
 | `runs` | `GhaIndieWorker.V1.Runs` | Plan, Run, Job, Step, LogChunk, RunCancellation, `RunStatus` |
@@ -52,37 +52,42 @@ compile`. `npm run contracts:check:all` sweeps all ten.
 ## What the subset can express, and what it cannot
 
 The parity IR is persistence-shaped (see the toolkit's `docs/subset.md`): scalars,
-string enums, arrays of scalars/enums, a primary key, unique constraints, indexes
-and foreign keys. Consequences worth knowing before editing an authority:
+string enums, arrays of scalars/enums, supported `Record<T>` maps persisted as
+JSON, a primary key, unique constraints, indexes and foreign keys. Wire-only
+refinements remain independently stated and are checked by TJSV. Consequences
+worth knowing before editing an authority:
 
 * **Every model carries `@Ores.table` / `x-ores-table` and a primary key.** For
   request/response and frame models that means an audit table — `ws_command_audit`,
   `onboarding_advance_requests`, `embedding_search_requests` — which is what the
   servers already write for replay and support triage.
-* **There is no sum type.** Tagged unions are modelled as a sealed object with a
-  `kind` discriminator. The JSON Schema authority adds a `oneOf` over `kind`
-  consts as a runtime refinement; the TypeSpec authority states the same table in
-  a comment above the model, and `src/v1/transport.rs` turns the flat frame into a
-  real Rust enum with `TryFrom`.
-* **There is no map type.** `vectorClock` is `json`; its runtime shape is pinned
-  by `additionalProperties` in the JSON Schema authority.
-* **Value bounds are not part of the IR.** `minLength`, `maxLength` (beyond the one
-  the IR carries), `minimum`, `maximum`, `minItems`, `maxItems` and `pattern` are
-  runtime refinements. Both authorities still state them — `@minValue` /
-  `@maxItems` / `@pattern` in TypeSpec, the matching keywords in JSON Schema — so
-  that "semantically identical" means identical to a reader, not only to the gate.
+* **The persistence IR has no sum type.** Tagged transport records stay flat for
+  SQL/code-generation purposes, while the TypeSpec authority emits the same
+  machine-checkable JSON Schema `oneOf` discriminator refinements as the authored
+  Draft 2020-12 authority. TJSV executes both validators against the same corpus.
+* **Typed dynamic-key maps remain JSON persistence.** `vectorClock` is authored as
+  `Record<int64>` so persistence stays JSONB while the emitted wire schema proves
+  every node-id value is a non-negative integer. An opaque `json` alias is not an
+  acceptable substitute for that value constraint.
+* **Most value bounds are outside the persistence IR.** `minLength`, `minimum`,
+  `maximum`, `minItems`, `maxItems`, `pattern`, conditional requirements and
+  similar wire refinements are still stated in both authorities. TJSV, rather
+  than the persistence projection, proves their validator behavior agrees.
 * **Foreign keys stay inside one slice**, because each slice is parsed alone.
   Cross-slice references are carried as a plain `uuid` and documented.
 
 ### Two syntax traps in the TypeSpec authority
 
-The toolkit's TypeSpec parser is regex-based and fails closed. Inside a model body:
+The toolkit's TypeSpec persistence parser is deliberately small and fails closed.
+Inside a model body:
 
-* no `{` or `}` — so `@pattern` must avoid `{n,m}` quantifiers (use `+`/`*` plus
-  `@minLength`/`@maxLength`);
+* no anonymous `{` / `}` type expressions — JSON-Schema-only refinements belong
+  in reviewed decorators before the model, while persisted fields stay inside the
+  supported scalar/enum/array/Record subset;
 * no `)` inside a decorator argument, and no `//` inside a string.
 
-`npm run contracts:check:all` catches both immediately.
+`npm run contracts:check:all` catches both immediately, while `tsp compile` and
+TJSV independently verify the official TypeSpec program and emitted wire schema.
 
 ## Fixtures
 
@@ -96,7 +101,7 @@ The filename prefix before the first `.` names the `$defs` entry. Two consumers
 read this tree and they check different things:
 
 | directory | `npm run validate:fixtures` (JSON Schema) | `cargo test` (serde) |
-|---|---|---|
+| --- | --- | --- |
 | `valid/` | must validate | must deserialize, and re-serialize to the identical JSON value |
 | `invalid/` | must fail | must fail — these break a *structural* rule (missing required field, wrong scalar type, unknown enum value, extra property) |
 | `invalid/schema-only/` | must fail | must **succeed** — these break only a value bound, which serde does not enforce |
