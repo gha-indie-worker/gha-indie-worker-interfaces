@@ -10,7 +10,7 @@
     "url": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "contracts:check": "npx ores-contracts check",
@@ -28,7 +28,8 @@
   },
   "devDependencies": {
     "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts#main",
-    "@typespec/compiler": "^0.60.0",
+    "@typespec/compiler": "1.16.0",
+    "@typespec/json-schema": "1.16.0",
     "ajv": "^8.17.1",
     "eslint": "^9.13.0",
     "markdownlint-cli2": "^0.14.0"
