@@ -95,7 +95,7 @@
         "needs": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
         "startedAt": { "type": "string", "format": "date-time" },
         "finishedAt": { "type": "string", "format": "date-time" },
-        "exitCode": { "type": "integer" }
+        "exitCode": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
       }
     },
     "Step": {
