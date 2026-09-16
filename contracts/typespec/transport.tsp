@@ -34,11 +34,11 @@ enum TcpFrameKind {
 
 @doc("One websocket command as received. The union is tagged by kind; fields not named by that kind are absent.")
 @TypeSpec.JsonSchema.extension("oneOf", #[
-  #{ properties: #{ kind: #{ const: "subscribe-run-logs" } }, required: #["kind", "runId"] },
-  #{ properties: #{ kind: #{ const: "unsubscribe-run-logs" } }, required: #["kind", "runId"] },
-  #{ properties: #{ kind: #{ const: "presence" } }, required: #["kind", "channel"] },
-  #{ properties: #{ kind: #{ const: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
-  #{ properties: #{ kind: #{ const: "heartbeat" } }, required: #["kind"] }
+  #{ properties: #{ kind: #{ `const`: "subscribe-run-logs" } }, required: #["kind", "runId"] },
+  #{ properties: #{ kind: #{ `const`: "unsubscribe-run-logs" } }, required: #["kind", "runId"] },
+  #{ properties: #{ kind: #{ `const`: "presence" } }, required: #["kind", "channel"] },
+  #{ properties: #{ kind: #{ `const`: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "heartbeat" } }, required: #["kind"] }
 ])
 @Ores.table("ws_command_audit")
 @Ores.unique("connectionId,clientSequence")
@@ -65,11 +65,11 @@ model WsCommand {
 
 @doc("One websocket event as emitted. The union is tagged by kind; fields not named by that kind are absent.")
 @TypeSpec.JsonSchema.extension("oneOf", #[
-  #{ properties: #{ kind: #{ const: "run-log" } }, required: #["kind", "runId", "jobId", "payload"] },
-  #{ properties: #{ kind: #{ const: "presence" } }, required: #["kind", "payload"] },
-  #{ properties: #{ kind: #{ const: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
-  #{ properties: #{ kind: #{ const: "heartbeat-ack" } }, required: #["kind"] },
-  #{ properties: #{ kind: #{ const: "error" } }, required: #["kind", "message"] }
+  #{ properties: #{ kind: #{ `const`: "run-log" } }, required: #["kind", "runId", "jobId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "presence" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "heartbeat-ack" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "error" } }, required: #["kind", "message"] }
 ])
 @Ores.table("ws_event_audit")
 @Ores.unique("connectionId,serverSequence")
@@ -94,12 +94,12 @@ model WsEvent {
 
 @doc("One frame on the stateful TCP avenue. payloadBytes is the decoded length and is bounded by the codec.")
 @TypeSpec.JsonSchema.extension("oneOf", #[
-  #{ properties: #{ kind: #{ const: "hello" } }, required: #["kind", "payload"] },
-  #{ properties: #{ kind: #{ const: "command" } }, required: #["kind", "payload"] },
-  #{ properties: #{ kind: #{ const: "event" } }, required: #["kind", "payload"] },
-  #{ properties: #{ kind: #{ const: "ping" } }, required: #["kind"] },
-  #{ properties: #{ kind: #{ const: "pong" } }, required: #["kind"] },
-  #{ properties: #{ kind: #{ const: "bye" } }, required: #["kind"] }
+  #{ properties: #{ kind: #{ `const`: "hello" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "command" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "event" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "ping" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "pong" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "bye" } }, required: #["kind"] }
 ])
 @Ores.table("tcp_frame_audit")
 @Ores.unique("connectionId,sequence")
