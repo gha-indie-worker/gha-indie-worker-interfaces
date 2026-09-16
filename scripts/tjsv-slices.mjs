@@ -59,7 +59,7 @@ if (unknown.length) {
 
 // Current reviewed TJSV main. Keep this as an exact 40-char commit so contract
 // evidence cannot drift under an unchanged IndieBuild source revision.
-const tjsvRevision = '7b1e79a32b89006a6eb6642ccd71ef25ffac0103';
+const tjsvRevision = '597adfaa662eb2a02d91c28c03ba5e2a46870821';
 const tjsvPackage = process.env.TJSV_PACKAGE
   ?? `https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsvRevision}.tar.gz`;
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -167,9 +167,6 @@ for (const slice of slices) {
           `--report=${resolve(reportDir, `${slice}.json`)}`,
           `--contract-ir=${resolve(contractIrDir, `${slice}.json`)}`,
           '--int64-strategy=number',
-          // The authored runtime contracts are closed objects. Keep the official
-          // TypeSpec JSON Schema witness equally closed so differential probes
-          // test the same unknown-field policy instead of manufacturing drift.
           '--seal-object-schemas=true',
           '--format-assertion=true',
           '--probes=true',
