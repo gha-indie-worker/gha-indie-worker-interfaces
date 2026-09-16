@@ -40,7 +40,7 @@ enum OnboardingOutcome {
 model OrgOnboardingTransition {
   @key id: uuid;
   orgId: uuid;
-  sequence: int64;
+  @minValue(1) sequence: int64;
   fromState: OrgOnboardingState;
   toState: OrgOnboardingState;
 
@@ -58,7 +58,7 @@ model OrgOnboardingTransition {
 model UserOnboardingTransition {
   @key id: uuid;
   userId: uuid;
-  sequence: int64;
+  @minValue(1) sequence: int64;
   fromState: UserOnboardingState;
   toState: UserOnboardingState;
 
