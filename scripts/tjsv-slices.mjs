@@ -167,7 +167,7 @@ for (const slice of slices) {
           `--report=${resolve(reportDir, `${slice}.json`)}`,
           `--contract-ir=${resolve(contractIrDir, `${slice}.json`)}`,
           '--int64-strategy=number',
-          '--seal-object-schemas=false',
+          '--seal-object-schemas=true',
           '--format-assertion=true',
           '--probes=true',
           '--max-probes=96',
