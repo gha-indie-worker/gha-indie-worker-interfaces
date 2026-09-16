@@ -26,8 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TJSV_REVISION: 597adfaa662eb2a02d91c28c03ba5e2a46870821
-  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/597adfaa662eb2a02d91c28c03ba5e2a46870821.tar.gz
+  TJSV_REVISION: fb38501f330dbe4fa4f011e32d391ca798b00a67
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/fb38501f330dbe4fa4f011e32d391ca798b00a67.tar.gz
 
 jobs:
   peer-authority:
