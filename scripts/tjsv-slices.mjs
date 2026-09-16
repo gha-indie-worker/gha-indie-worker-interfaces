@@ -59,7 +59,7 @@ if (unknown.length) {
 
 // Current reviewed TJSV main: structural parity normalization + fail-closed
 // extension policy. Keep this as an exact 40-char commit.
-const tjsvRevision = '597adfaa662eb2a02d91c28c03ba5e2a46870821';
+const tjsvRevision = 'dd3418aa243198619abfd6106cea3540ef0bbb4f';
 const tjsvPackage = process.env.TJSV_PACKAGE
   ?? `https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsvRevision}.tar.gz`;
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
