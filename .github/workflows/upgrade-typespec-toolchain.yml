@@ -1,0 +1,50 @@
+name: regenerate pinned TypeSpec toolchain lockfile
+
+on:
+  push:
+    branches:
+      - feat/durable-queue-contracts-20260913
+    paths:
+      - package.json
+      - .github/workflows/upgrade-typespec-toolchain.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/durable-queue-contracts-20260913
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.2
+      - name: Regenerate exact lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify exact TypeSpec pair
+        run: |
+          node - <<'NODE'
+          const lock = require('./package-lock.json');
+          const pkgs = lock.packages || {};
+          const compiler = pkgs['node_modules/@typespec/compiler']?.version;
+          const schema = pkgs['node_modules/@typespec/json-schema']?.version;
+          if (compiler !== '1.16.0' || schema !== '1.16.0') {
+            throw new Error(`unexpected TypeSpec pair compiler=${compiler} json-schema=${schema}`);
+          }
+          NODE
+      - name: Commit lockfile only when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo 'package-lock.json already current'
+            exit 0
+          fi
+          git config user.name 'ORESoftware'
+          git config user.email 'alex@oresoftware.com'
+          git add package-lock.json
+          git commit -m 'build: regenerate TypeSpec 1.16 lockfile'
+          git push origin HEAD:feat/durable-queue-contracts-20260913
