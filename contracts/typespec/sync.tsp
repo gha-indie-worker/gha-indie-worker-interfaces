@@ -1,4 +1,5 @@
 import "./ores.tsp";
+import "@typespec/json-schema";
 using Ores;
 
 namespace GhaIndieWorker.V1.Sync;
@@ -31,7 +32,15 @@ model CausalEnvelope {
   @maxLength(128) entityId: string;
 
   `op`: SyncOp;
-  vectorClock: json;
+
+  // Persistence remains JSONB, but the wire authority is not opaque: every
+  // dynamic node-id value is a non-negative monotonic int64 counter. The
+  // explicit JSON Schema extension keeps the official TypeSpec emitter witness
+  // equivalent to the independently authored Draft 2020-12 authority while
+  // ores-contracts normalizes Record<int64> to JSON persistence.
+  @TypeSpec.JsonSchema.extension("additionalProperties", #{ type: "integer", minimum: 0 })
+  vectorClock: Record<int64>;
+
   payload: json;
   conflictPolicy: ConflictPolicy;
 
