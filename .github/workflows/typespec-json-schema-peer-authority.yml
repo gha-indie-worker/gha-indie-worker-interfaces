@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TJSV_SHA: 93dd73cb246a09b0a1c62d7192cc62ca6ecbe405
+  TJSV_SHA: 597adfaa662eb2a02d91c28c03ba5e2a46870821
 
 jobs:
   parity:
