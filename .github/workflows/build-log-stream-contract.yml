@@ -26,8 +26,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TJSV_REVISION: a4b731fbf82c4d162abd74fd03758fa32bb76176
-  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/a4b731fbf82c4d162abd74fd03758fa32bb76176.tar.gz
+  TJSV_REVISION: 597adfaa662eb2a02d91c28c03ba5e2a46870821
+  TJSV_PACKAGE: https://github.com/ORESoftware/typespec-json-schema-validator/archive/597adfaa662eb2a02d91c28c03ba5e2a46870821.tar.gz
 
 jobs:
   peer-authority:
@@ -115,7 +115,7 @@ jobs:
           set -e
           test "$status" -eq 2
           node - <<'NODE'
-          const fs = require('node:fs');
+          const fs = require('fs');
           const report = JSON.parse(fs.readFileSync('target/tjsv/drift/report.json', 'utf8'));
           if (report.status !== 'stopped_for_evaluation') {
             throw new Error(`expected stopped_for_evaluation, got ${report.status}`);
