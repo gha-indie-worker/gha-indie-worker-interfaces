@@ -1,4 +1,5 @@
 import "./ores.tsp";
+import "@typespec/json-schema";
 using Ores;
 
 namespace GhaIndieWorker.V1.Sync;
@@ -31,6 +32,7 @@ model CausalEnvelope {
   @maxLength(128) entityId: string;
 
   `op`: SyncOp;
+  @TypeSpec.JsonSchema.extension("additionalProperties", #{ type: "integer", minimum: 0 })
   vectorClock: json;
   payload: json;
   conflictPolicy: ConflictPolicy;
