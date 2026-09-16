@@ -1,0 +1,83 @@
+name: refresh audited dependency lock once
+
+on:
+  push:
+    branches:
+      - security/repin-remediated-tjsv-20260915
+    paths:
+      - .github/workflows/refresh-audited-lock-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-audited-lock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: security/repin-remediated-tjsv-20260915
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.16.0
+
+      - name: Materialize the independently certified dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'package.json';
+          const p = JSON.parse(readFileSync(path, 'utf8'));
+          p.devDependencies['@oresoftware/ores-contracts'] = 'https://github.com/ORESoftware/ores-contracts/archive/fef0b716d950f717c240504bd85d6f1732a383a0.tar.gz';
+          p.devDependencies['markdownlint-cli2'] = '0.21.0';
+          p.overrides = {
+            ...(p.overrides ?? {}),
+            'markdownlint-cli2': {
+              'js-yaml': '4.3.2',
+              'markdown-it': '14.3.0'
+            }
+          };
+          writeFileSync(path, `${JSON.stringify(p, null, 2)}\n`);
+          NODE
+          npm install --package-lock-only --ignore-scripts
+          grep -q 'fef0b716d950f717c240504bd85d6f1732a383a0' package-lock.json
+          ! grep -q 'ores-contracts#main' package-lock.json
+
+      - name: Verify lock install and zero-advisory graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm audit --json > /tmp/npm-audit.json
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const a = JSON.parse(readFileSync('/tmp/npm-audit.json', 'utf8'));
+          const v = a.metadata?.vulnerabilities ?? {};
+          console.log(JSON.stringify(v, null, 2));
+          if ((v.total ?? 0) !== 0) process.exit(1);
+          NODE
+          npm run lint:js
+          npm run lint:md
+
+      - name: Commit only the audited package witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check -- package.json package-lock.json
+          git add package.json package-lock.json
+          git diff --cached --quiet && exit 0
+          git config user.name 'ORESoftware dependency witness'
+          git config user.email 'alex@oresoftware.com'
+          git commit -m 'build: pin audited immutable contract dependencies'
+          git push origin HEAD:security/repin-remediated-tjsv-20260915
