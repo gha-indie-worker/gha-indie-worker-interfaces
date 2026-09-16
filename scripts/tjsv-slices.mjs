@@ -167,7 +167,10 @@ for (const slice of slices) {
           `--report=${resolve(reportDir, `${slice}.json`)}`,
           `--contract-ir=${resolve(contractIrDir, `${slice}.json`)}`,
           '--int64-strategy=number',
-          '--seal-object-schemas=false',
+          // The authored runtime contracts are closed objects. Keep the official
+          // TypeSpec JSON Schema witness equally closed so differential probes
+          // test the same unknown-field policy instead of manufacturing drift.
+          '--seal-object-schemas=true',
           '--format-assertion=true',
           '--probes=true',
           '--max-probes=96',
