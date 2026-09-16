@@ -1,4 +1,5 @@
 import "./ores-decorators.js";
+using Ores;
 
 namespace Ores;
 
@@ -15,7 +16,11 @@ extern dec index(target: Model, fields: valueof string);
 /** Foreign key: "Model.field". */
 extern dec references(target: ModelProperty, to: valueof string);
 
-/** Wire-level UUID. Emitted as SQL UUID, Rust String, TypeScript string. */
+// Wire-level UUID. Emitted as SQL UUID, Rust String, TypeScript string.
+// Keep this as a plain source comment rather than a TypeSpec @doc so the JSON
+// Schema emitter's mechanical uuid helper contains only scalar assertions. TJSV
+// can then safely inline that explicitly ignored helper while comparing product
+// declarations; the comment remains documentation for human authors.
 @format("uuid")
 scalar uuid extends string;
 
