@@ -43,6 +43,7 @@ enum TcpFrameKind {
   #{ properties: #{ kind: #{ `const`: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
   #{ properties: #{ kind: #{ `const`: "heartbeat" } }, required: #["kind"] },
 ])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model WsCommand {
   @key id: uuid;
   kind: WsCommandKind;
@@ -74,6 +75,7 @@ model WsCommand {
   #{ properties: #{ kind: #{ `const`: "heartbeat-ack" } }, required: #["kind"] },
   #{ properties: #{ kind: #{ `const`: "error" } }, required: #["kind", "message"] },
 ])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model WsEvent {
   @key id: uuid;
   kind: WsEventKind;
@@ -104,6 +106,7 @@ model WsEvent {
   #{ properties: #{ kind: #{ `const`: "pong" } }, required: #["kind"] },
   #{ properties: #{ kind: #{ `const`: "bye" } }, required: #["kind"] },
 ])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model TcpFrame {
   @key id: uuid;
   kind: TcpFrameKind;
