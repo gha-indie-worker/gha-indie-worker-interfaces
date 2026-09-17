@@ -13,7 +13,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "contracts:check": "npx ores-contracts check",
+    "contracts:check": "node node_modules/@oresoftware/ores-contracts/src/cli.mjs check",
     "contracts:check:all": "node scripts/contracts-slices.mjs check",
     "contracts:generate": "node scripts/contracts-slices.mjs generate",
     "contracts:tjsv": "node scripts/tjsv-slices.mjs check",
