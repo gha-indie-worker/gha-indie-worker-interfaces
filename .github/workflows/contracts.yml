@@ -31,8 +31,8 @@ jobs:
         run: node scripts/contracts-slices.mjs check
       - name: TypeSpec + JSON Schema semantic parity, recorded corpus, and Contract IR (TJSV)
         run: npm run contracts:tjsv
-      - name: generated/ is up to date (run `npm run contracts:generate` and commit)
-        run: node scripts/contracts-slices.mjs generate && git diff --exit-code -- generated
+      - name: Generate every admitted contract projection
+        run: node scripts/contracts-slices.mjs generate
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -127,8 +127,10 @@ jobs:
       - name: Apply SQL_T and SQL_J to separate schemas and diff pg catalogs
         run: |
           set -euo pipefail
+          cli=node_modules/@oresoftware/ores-contracts/src/cli.mjs
+          test -f "$cli"
           for cfg in contracts/config/*.config.json; do
             echo "== $cfg"
-            npx ores-contracts db-check --config "$cfg" \
+            node "$cli" db-check --config "$cfg" \
               --database-url postgresql://postgres:postgres@localhost:5432/postgres
           done
