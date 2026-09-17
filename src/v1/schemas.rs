@@ -134,10 +134,13 @@ mod tests {
                 if def.get("enum").is_some() {
                     continue;
                 }
-                assert_eq!(
-                    def["additionalProperties"],
-                    serde_json::Value::Bool(false),
-                    "{}.{name} must be sealed",
+                let sealed = def.get("additionalProperties")
+                    == Some(&serde_json::Value::Bool(false))
+                    || def.get("unevaluatedProperties")
+                        == Some(&serde_json::Value::Bool(false));
+                assert!(
+                    sealed,
+                    "{}.{name} must be sealed with additionalProperties:false or unevaluatedProperties:false",
                     slice.name
                 );
                 assert!(
