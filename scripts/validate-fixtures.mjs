@@ -23,6 +23,7 @@
 //
 // Supported subset (see contracts/README.md):
 //   $ref (#/$defs/*), type, required, properties, additionalProperties (false or a schema),
+//   unevaluatedProperties:false when all named properties are declared by the same object,
 //   enum, const, items, minItems, maxItems, minLength, maxLength, minimum, maximum,
 //   pattern, oneOf, and format-lite over uuid / date-time / date / byte.
 // Anything else in an authority is a bug: this validator fails closed on unknown keywords.
@@ -44,7 +45,7 @@ const FORMATS = {
 
 const KNOWN_KEYWORDS = new Set([
   '$ref', '$comment', 'title', 'description', 'default', 'examples', 'deprecated',
-  'type', 'required', 'properties', 'additionalProperties', 'enum', 'const',
+  'type', 'required', 'properties', 'additionalProperties', 'unevaluatedProperties', 'enum', 'const',
   'items', 'minItems', 'maxItems', 'minLength', 'maxLength', 'minimum', 'maximum',
   'pattern', 'format', 'oneOf',
 ]);
@@ -75,6 +76,30 @@ function deref(schema, root, where, errors) {
     schema = Object.keys(rest).length ? { ...target, ...rest } : target;
   }
   return schema;
+}
+
+function locallyClosableUnevaluatedProperties(schema, props, where, errors) {
+  if (schema.unevaluatedProperties === undefined) return false;
+  if (schema.unevaluatedProperties !== false) {
+    errors.push(`${where}: only unevaluatedProperties:false is supported by the dependency-free validator`);
+    return false;
+  }
+
+  // In the admitted subset, every property named by a oneOf refinement must
+  // already be declared by the enclosing object's properties map. That makes
+  // unevaluatedProperties:false observationally equivalent to closing the same
+  // local property set, without pretending to implement general annotation
+  // collection across arbitrary applicators.
+  for (const branch of schema.oneOf ?? []) {
+    if (!branch || typeof branch !== 'object' || Array.isArray(branch)) continue;
+    for (const key of Object.keys(branch.properties ?? {})) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) {
+        errors.push(`${where}: unevaluatedProperties:false branch declares non-local property ${key}`);
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** Validate `value` against `schema`. Pushes human-readable messages into `errors`. */
@@ -132,10 +157,11 @@ function validateNode(schema, value, root, where, errors) {
       if (!Object.prototype.hasOwnProperty.call(value, key)) errors.push(`${where}: missing required property ${key}`);
     }
     const props = s.properties ?? {};
+    const closeUnevaluated = locallyClosableUnevaluatedProperties(s, props, where, errors);
     for (const [key, child] of Object.entries(value)) {
       if (Object.prototype.hasOwnProperty.call(props, key)) {
         validateNode(props[key], child, root, `${where}.${key}`, errors);
-      } else if (s.additionalProperties === false) {
+      } else if (s.additionalProperties === false || closeUnevaluated) {
         errors.push(`${where}: additional property ${key} is not allowed`);
       } else if (s.additionalProperties && typeof s.additionalProperties === 'object') {
         validateNode(s.additionalProperties, child, root, `${where}.${key}`, errors);
