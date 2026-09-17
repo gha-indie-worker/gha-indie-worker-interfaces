@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  ORES_CONTRACTS_REV: 72bb55a48ae26fa51be502ae530b3d3eac5119df
+  ORES_CONTRACTS_REV: 152f55ae3f8d1a6626249b3dd72ecccb9ff0878c
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
