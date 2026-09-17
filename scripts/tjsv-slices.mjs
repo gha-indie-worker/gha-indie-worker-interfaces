@@ -57,10 +57,11 @@ if (unknown.length) {
   process.exit(1);
 }
 
-// Reviewed TJSV revision with safe ignored Record<T> helper comparison. Keep this
-// as an exact 40-char commit so contract evidence cannot drift under an unchanged
-// IndieBuild source revision.
-const tjsvRevision = 'e9a38eb98d01a3faaef135a09cdeb71b81922b48';
+// Reviewed TJSV revision with safe ignored Record<T> helper comparison,
+// including the constrained Record<unknown> ref+sibling form emitted by TypeSpec.
+// Keep this as an exact 40-char commit so contract evidence cannot drift under an
+// unchanged IndieBuild source revision.
+const tjsvRevision = 'bd503465dab8c5148fee722b443ed04ff126c9bf';
 const tjsvPackage = process.env.TJSV_PACKAGE
   ?? `https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsvRevision}.tar.gz`;
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
