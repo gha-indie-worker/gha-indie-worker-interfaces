@@ -136,8 +136,7 @@ mod tests {
                 }
                 let sealed = def.get("additionalProperties")
                     == Some(&serde_json::Value::Bool(false))
-                    || def.get("unevaluatedProperties")
-                        == Some(&serde_json::Value::Bool(false));
+                    || def.get("unevaluatedProperties") == Some(&serde_json::Value::Bool(false));
                 assert!(
                     sealed,
                     "{}.{name} must be sealed with additionalProperties:false or unevaluatedProperties:false",
