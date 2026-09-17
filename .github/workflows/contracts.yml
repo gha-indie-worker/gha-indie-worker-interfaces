@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ORES_CONTRACTS_REV: 7e28f6da161a9427af936afa17168d7e083c5351
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,6 +28,8 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
       - name: TypeSpec compiles
         run: npm run lint:typespec
       - name: TypeSpec + JSON Schema projection parity, every slice
@@ -81,7 +86,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - run: npm ci && node scripts/contracts-slices.mjs generate
+      - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
+      - run: node scripts/contracts-slices.mjs generate
       - name: serde types + SeaORM entities + Diesel schema compile together
         run: |
           set -euo pipefail
@@ -124,6 +132,8 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
       - name: Apply SQL_T and SQL_J to separate schemas and diff pg catalogs
         run: |
           set -euo pipefail
