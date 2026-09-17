@@ -86,13 +86,22 @@ jobs:
         run: |
           set -euo pipefail
           witness=node_modules/@oresoftware/ores-contracts/scripts/rust-witness.sh
-          if [ ! -x "$witness" ]; then
-            echo "ores-contracts did not ship its rust witness script; skipping"
-            exit 0
-          fi
-          for slice in $(node -e 'process.stdout.write(require("./contracts.config.json").slices.join(" "))'); do
-            echo "== $slice"
-            "$witness" "generated/$slice"
+          test -x "$witness"
+          for cfg in contracts/config/*.config.json; do
+            slice="$(basename "$cfg" .config.json)"
+            out="$(node -e 'const fs=require("fs"),p=require("path"); const f=process.argv[1]; const c=JSON.parse(fs.readFileSync(f,"utf8")); process.stdout.write(p.resolve(p.dirname(f), c.out ?? "generated"));' "$cfg")"
+            echo "== $slice ($out)"
+            for artifact in rust/types.rs seaorm/entities.rs diesel/schema.rs; do
+              if [ ! -f "$out/$artifact" ]; then
+                echo "missing generated Rust witness artifact: $out/$artifact" >&2
+                echo '--- generated/ inventory ---' >&2
+                find generated -maxdepth 4 -type f -print 2>/dev/null | sort >&2 || true
+                echo '--- target/ores-contracts inventory ---' >&2
+                find target/ores-contracts -maxdepth 5 -type f -print 2>/dev/null | sort >&2 || true
+                exit 1
+              fi
+            done
+            "$witness" "$out"
           done
 
   db-witness:
