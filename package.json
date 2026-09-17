@@ -27,7 +27,7 @@
     "test": "npm run validate:fixtures:builtin && npm run validate:fixtures && npm run contracts:check:all && npm run contracts:tjsv"
   },
   "devDependencies": {
-    "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts#main",
+    "@oresoftware/ores-contracts": "github:ORESoftware/ores-contracts#152f55ae3f8d1a6626249b3dd72ecccb9ff0878c",
     "@typespec/compiler": "1.16.0",
     "@typespec/json-schema": "1.16.0",
     "ajv": "^8.17.1",
