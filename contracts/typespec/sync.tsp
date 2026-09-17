@@ -17,7 +17,7 @@ enum ConflictPolicy {
   Reject: "reject",
 }
 
-@doc("One opto-sync causal envelope. vectorClock maps node id to a monotonic counter and is the only ordering authority.")
+@doc("One opto-sync causal envelope. vectorClock maps node id to a monotonic counter and is the only ordering authority. The runtime JSON Schema constrains each counter to a non-negative integer.")
 @Ores.table("sync_causal_envelopes")
 @Ores.unique("originNode,originSequence")
 @Ores.index("entity,entityId")
@@ -32,8 +32,7 @@ model CausalEnvelope {
   @maxLength(128) entityId: string;
 
   `op`: SyncOp;
-  @TypeSpec.JsonSchema.extension("additionalProperties", #{ type: "integer", minimum: 0 })
-  vectorClock: json;
+  vectorClock: Record<int64>;
   payload: json;
   conflictPolicy: ConflictPolicy;
 
