@@ -32,7 +32,8 @@ model CausalEnvelope {
   @maxLength(128) entityId: string;
 
   `op`: SyncOp;
-  vectorClock: Record<int64>;
+  @TypeSpec.JsonSchema.extension("additionalProperties", #{ type: "integer", minimum: 0 })
+  vectorClock: Record<unknown>;
   payload: json;
   conflictPolicy: ConflictPolicy;
 
