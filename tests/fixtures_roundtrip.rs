@@ -86,8 +86,16 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
             "HostedRunObservation",
             check::<queue::HostedRunObservation>,
         ),
-        ("queue", "ExecutionEvidence", check::<queue::ExecutionEvidence>),
-        ("queue", "CheckPublication", check::<queue::CheckPublication>),
+        (
+            "queue",
+            "ExecutionEvidence",
+            check::<queue::ExecutionEvidence>,
+        ),
+        (
+            "queue",
+            "CheckPublication",
+            check::<queue::CheckPublication>,
+        ),
         (
             "webhooks",
             "GitHubDelivery",
