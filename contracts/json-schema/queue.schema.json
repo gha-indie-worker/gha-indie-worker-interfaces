@@ -162,7 +162,7 @@
         "github_job_id": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
         "status": { "$ref": "#/$defs/HostedJobStatus" },
         "conclusion": { "$ref": "#/$defs/HostedJobConclusion" },
-        "step_count": { "type": "integer", "minimum": 0 },
+        "step_count": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
         "classification": { "$ref": "#/$defs/HostedEvidenceClassification" },
         "admission_reason": { "$ref": "#/$defs/RunnerAdmissionReason" },
         "observed_at": { "type": "string", "format": "date-time" }
