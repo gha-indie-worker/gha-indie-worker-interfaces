@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! Serde mirror of the `queue` slice: durable jobs, leases, claim receipts and
-//! supersession audit records. The authored TypeSpec and JSON Schema documents
-//! remain the two peer authorities; these Rust types are an ergonomic wire mirror.
+//! Serde mirror of the `queue` slice: durable jobs, leases, claim receipts,
+//! supersession audit records, hosted observations, exact-lease execution
+//! evidence and check publication. The authored TypeSpec and JSON Schema
+//! documents remain the two peer authorities; these Rust types are an ergonomic
+//! wire mirror.
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,57 @@ pub enum CancellationReason {
     Policy,
     Superseded,
     LeaseExpired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedEvidenceClassification {
+    NonTerminal,
+    StepfulSuccess,
+    StepfulFailure,
+    ZeroStepRunnerAdmissionFailure,
+    ZeroStepUnknown,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedJobStatus {
+    Queued,
+    InProgress,
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedJobConclusion {
+    Success,
+    Failure,
+    Cancelled,
+    TimedOut,
+    Neutral,
+    Skipped,
+    ActionRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerAdmissionReason {
+    BudgetExhausted,
+    QuotaExceeded,
+    NoEligibleRunner,
+    RunnerProvisioningFailure,
+    RunnerServiceUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckState {
+    Pending,
+    Success,
+    Failure,
+    Error,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -111,6 +164,66 @@ pub struct JobSupersession {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct HostedRunObservation {
+    pub id: String,
+    pub job_id: String,
+    pub repository: String,
+    pub revision: String,
+    pub github_run_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_job_id: Option<i64>,
+    pub status: HostedJobStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conclusion: Option<HostedJobConclusion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_count: Option<i32>,
+    pub classification: HostedEvidenceClassification,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_reason: Option<RunnerAdmissionReason>,
+    pub observed_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ExecutionEvidence {
+    pub id: String,
+    pub job_id: String,
+    pub lease_id: String,
+    pub worker_id: String,
+    pub lease_generation: i64,
+    pub fencing_token: i64,
+    pub runtime_backend: String,
+    pub os: String,
+    pub arch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ores_compose_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ores_compose_session: Option<String>,
+    pub artifact_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted_summary: Option<String>,
+    pub started_at: String,
+    pub finished_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct CheckPublication {
+    pub id: String,
+    pub job_id: String,
+    pub lease_id: String,
+    pub lease_generation: i64,
+    pub fencing_token: i64,
+    pub revision: String,
+    pub context: String,
+    pub state: CheckState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    pub published_at: String,
+}
+
 impl QueueState {
     pub const ALL: [QueueState; 7] = [
         QueueState::Queued,
@@ -167,6 +280,21 @@ impl QueueState {
     }
 }
 
+impl HostedEvidenceClassification {
+    #[must_use]
+    pub const fn is_source_level_success(self) -> bool {
+        matches!(self, Self::StepfulSuccess)
+    }
+
+    #[must_use]
+    pub const fn is_zero_step(self) -> bool {
+        matches!(
+            self,
+            Self::ZeroStepRunnerAdmissionFailure | Self::ZeroStepUnknown
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +310,18 @@ mod tests {
     fn claimed_is_the_only_inflight_state_that_can_return_to_queued() {
         assert!(QueueState::Claimed.may_advance_to(QueueState::Queued));
         assert!(!QueueState::Running.may_advance_to(QueueState::Queued));
+    }
+
+    #[test]
+    fn zero_step_hosted_evidence_is_never_source_success() {
+        for classification in [
+            HostedEvidenceClassification::ZeroStepRunnerAdmissionFailure,
+            HostedEvidenceClassification::ZeroStepUnknown,
+        ] {
+            assert!(classification.is_zero_step());
+            assert!(!classification.is_source_level_success());
+        }
+        assert!(HostedEvidenceClassification::StepfulSuccess.is_source_level_success());
     }
 
     #[test]
@@ -208,5 +348,23 @@ mod tests {
         let value = serde_json::to_value(job).expect("serialize queue job");
         assert!(value.get("workflow_path").is_some());
         assert!(value.get("workflowPath").is_none());
+    }
+
+    #[test]
+    fn check_publication_preserves_fencing_identity() {
+        let raw = r#"{
+            "id":"66666666-6666-4666-8666-666666666666",
+            "job_id":"11111111-1111-4111-8111-111111111111",
+            "lease_id":"22222222-2222-4222-8222-222222222222",
+            "lease_generation":3,
+            "fencing_token":9,
+            "revision":"e947a78f0b3e1c91ce930c02cf25b57f3e919e8f",
+            "context":"indiebuild.dev/ci",
+            "state":"success",
+            "published_at":"2026-09-14T21:34:05Z"
+        }"#;
+        let publication: CheckPublication = serde_json::from_str(raw).expect("publication");
+        assert_eq!(publication.lease_generation, 3);
+        assert_eq!(publication.fencing_token, 9);
     }
 }
