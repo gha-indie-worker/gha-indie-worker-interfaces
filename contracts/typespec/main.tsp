@@ -14,6 +14,7 @@ import "./identity.tsp";
 import "./onboarding.tsp";
 import "./runs.tsp";
 import "./workers.tsp";
+import "./queue.tsp";
 import "./webhooks.tsp";
 import "./chat.tsp";
 import "./embeddings.tsp";

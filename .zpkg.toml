@@ -1,9 +1,12 @@
-name = "gha-indie-worker-interfaces"
-kind = "interfaces"
-version = "0.1.0"
-
+[package]
 org = "gha-indie-worker"
+name = "gha-indie-worker-interfaces"
+version = "0.1.0"
 language = "rust"
 
-[dev-dependencies]
+[package.repository]
+vcs = "git"
+url = "https://github.com/gha-indie-worker/gha-indie-worker-interfaces"
+
+[dependencies]
 "oresoftware/ores-contracts" = "^0.1.0"

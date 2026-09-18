@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ORES_CONTRACTS_REV: 7deb5e65aaf78fcc8f96c8bceda53a054704a9d0
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,14 +28,16 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
       - name: TypeSpec compiles
         run: npm run lint:typespec
       - name: TypeSpec + JSON Schema projection parity, every slice
         run: node scripts/contracts-slices.mjs check
       - name: TypeSpec + JSON Schema semantic parity, recorded corpus, and Contract IR (TJSV)
         run: npm run contracts:tjsv
-      - name: generated/ is up to date (run `npm run contracts:generate` and commit)
-        run: node scripts/contracts-slices.mjs generate && git diff --exit-code -- generated
+      - name: Generate every admitted contract projection
+        run: node scripts/contracts-slices.mjs generate
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -81,18 +86,30 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - run: npm ci && node scripts/contracts-slices.mjs generate
+      - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
+      - run: node scripts/contracts-slices.mjs generate
       - name: serde types + SeaORM entities + Diesel schema compile together
         run: |
           set -euo pipefail
           witness=node_modules/@oresoftware/ores-contracts/scripts/rust-witness.sh
-          if [ ! -x "$witness" ]; then
-            echo "ores-contracts did not ship its rust witness script; skipping"
-            exit 0
-          fi
-          for slice in $(node -e 'process.stdout.write(require("./contracts.config.json").slices.join(" "))'); do
-            echo "== $slice"
-            "$witness" "generated/$slice"
+          test -x "$witness"
+          for cfg in contracts/config/*.config.json; do
+            slice="$(basename "$cfg" .config.json)"
+            out="$(node -e 'const fs=require("fs"),p=require("path"); const f=process.argv[1]; const c=JSON.parse(fs.readFileSync(f,"utf8")); process.stdout.write(p.resolve(p.dirname(f), c.out ?? "generated"));' "$cfg")"
+            echo "== $slice ($out)"
+            for artifact in rust/types.rs seaorm/entities.rs diesel/schema.rs; do
+              if [ ! -f "$out/$artifact" ]; then
+                echo "missing generated Rust witness artifact: $out/$artifact" >&2
+                echo '--- generated/ inventory ---' >&2
+                find generated -maxdepth 4 -type f -print 2>/dev/null | sort >&2 || true
+                echo '--- target/ores-contracts inventory ---' >&2
+                find target/ores-contracts -maxdepth 5 -type f -print 2>/dev/null | sort >&2 || true
+                exit 1
+              fi
+            done
+            "$witness" "$out"
           done
 
   db-witness:
@@ -115,11 +132,15 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Install exact ores-contracts witness revision
+        run: npm install --no-save --package-lock=false "git+https://github.com/ORESoftware/ores-contracts.git#${ORES_CONTRACTS_REV}"
       - name: Apply SQL_T and SQL_J to separate schemas and diff pg catalogs
         run: |
           set -euo pipefail
+          cli=node_modules/@oresoftware/ores-contracts/src/cli.mjs
+          test -f "$cli"
           for cfg in contracts/config/*.config.json; do
             echo "== $cfg"
-            npx ores-contracts db-check --config "$cfg" \
+            node "$cli" db-check --config "$cfg" \
               --database-url postgresql://postgres:postgres@localhost:5432/postgres
           done

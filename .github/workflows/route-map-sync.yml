@@ -12,12 +12,15 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: gha-indie-worker/gha-indie-worker-lib-core
-          path: ../gha-indie-worker-lib-core
-      - uses: actions/setup-python@v5
+          path: .deps/gha-indie-worker-lib-core
+          persist-credentials: false
+      - name: Expose checker-compatible sibling path
+        run: ln -s "$GITHUB_WORKSPACE/.deps/gha-indie-worker-lib-core" "$GITHUB_WORKSPACE/../gha-indie-worker-lib-core"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
       # No pip install: the checker and generator are standard library only, so

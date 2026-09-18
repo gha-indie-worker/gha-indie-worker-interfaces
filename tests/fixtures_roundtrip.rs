@@ -1,8 +1,8 @@
 //! Every fixture in `contracts/fixtures/` is driven through serde.
 //!
 //! * `valid/` must deserialize, and `to_value(parse(raw)) == parse_value(raw)` —
-//!   which is what actually proves `#[serde(rename_all = "camelCase")]` and every
-//!   field name in `src/v1/` match the JSON Schema authority.
+//!   which is what actually proves serde field naming and every field name in
+//!   `src/v1/` match the JSON Schema authority.
 //! * `invalid/*.json` (top level) must FAIL to deserialize. Those fixtures break a
 //!   structural rule — a missing required field, a wrong scalar type, an unknown
 //!   enum value, or an extra property that `deny_unknown_fields` rejects.
@@ -20,8 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gha_indie_worker_interfaces::v1::{
-    chat, embeddings, errors, identity, onboarding, runs, schemas, sync, transport, webhooks,
-    workers,
+    chat, embeddings, errors, identity, onboarding, queue, runs, schemas, sync, transport,
+    webhooks, workers,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -77,6 +77,25 @@ fn table() -> Vec<(&'static str, &'static str, Check)> {
         ("workers", "Capability", check::<workers::Capability>),
         ("workers", "Heartbeat", check::<workers::Heartbeat>),
         ("workers", "Profile", check::<workers::Profile>),
+        ("queue", "QueueJob", check::<queue::QueueJob>),
+        ("queue", "JobLease", check::<queue::JobLease>),
+        ("queue", "ClaimReceipt", check::<queue::ClaimReceipt>),
+        ("queue", "JobSupersession", check::<queue::JobSupersession>),
+        (
+            "queue",
+            "HostedRunObservation",
+            check::<queue::HostedRunObservation>,
+        ),
+        (
+            "queue",
+            "ExecutionEvidence",
+            check::<queue::ExecutionEvidence>,
+        ),
+        (
+            "queue",
+            "CheckPublication",
+            check::<queue::CheckPublication>,
+        ),
         (
             "webhooks",
             "GitHubDelivery",
@@ -373,5 +392,35 @@ fn run_status_transition_table_matches_the_json_schema_authority() {
         listed_sorted.sort();
         code.sort();
         assert_eq!(code, listed_sorted, "run status edges for {status:?}");
+    }
+}
+
+#[test]
+fn queue_state_transition_table_matches_the_json_schema_authority() {
+    let doc: Value = serde_json::from_str(schemas::QUEUE).unwrap();
+    let declared = &doc["x-ores-transitions"]["queue_state"];
+    for state in queue::QueueState::ALL {
+        let key = serde_json::to_value(state).unwrap();
+        let listed: Vec<String> = declared[key.as_str().unwrap()]
+            .as_array()
+            .unwrap_or_else(|| panic!("schema has no queue edges for {state:?}"))
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let mut code: Vec<String> = state
+            .allowed_next()
+            .iter()
+            .map(|s| {
+                serde_json::to_value(s)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
+        code.sort();
+        assert_eq!(code, listed_sorted, "queue state edges for {state:?}");
     }
 }

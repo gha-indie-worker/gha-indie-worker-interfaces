@@ -31,6 +31,7 @@ pub mod embeddings;
 pub mod errors;
 pub mod identity;
 pub mod onboarding;
+pub mod queue;
 pub mod runs;
 pub mod schemas;
 pub mod sync;
@@ -42,11 +43,12 @@ pub mod workers;
 pub const CONTRACT_VERSION: &str = "v1";
 
 /// Names of every slice, matching `contracts.config.json`.
-pub const SLICES: [&str; 10] = [
+pub const SLICES: [&str; 11] = [
     "identity",
     "onboarding",
     "runs",
     "workers",
+    "queue",
     "webhooks",
     "chat",
     "embeddings",

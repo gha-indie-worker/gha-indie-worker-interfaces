@@ -23,6 +23,7 @@
     "WsCommand": {
       "type": "object",
       "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "One websocket command as received. The union is tagged by kind; fields not named by that kind are absent.",
       "x-ores-table": "ws_command_audit",
       "x-ores-primary-key": ["id"],
@@ -54,6 +55,7 @@
     "WsEvent": {
       "type": "object",
       "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "One websocket event as emitted. The union is tagged by kind; fields not named by that kind are absent.",
       "x-ores-table": "ws_event_audit",
       "x-ores-primary-key": ["id"],
@@ -84,6 +86,7 @@
     "TcpFrame": {
       "type": "object",
       "additionalProperties": false,
+      "unevaluatedProperties": false,
       "description": "One frame on the stateful TCP avenue. payloadBytes is the decoded length and is bounded by the codec.",
       "x-ores-table": "tcp_frame_audit",
       "x-ores-primary-key": ["id"],

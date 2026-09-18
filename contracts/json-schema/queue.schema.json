@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gha-indie-worker/gha-indie-worker-interfaces/contracts/json-schema/queue.schema.json",
+  "title": "GHA Indie Worker — durable queue",
+  "description": "Independently authored JSON Schema authority for durable pull-queue jobs, leases, claim receipts, supersession, hosted observations, exact-lease execution evidence and check publication. Peer of contracts/typespec/queue.tsp; neither is generated from the other.",
+  "x-ores-namespace": "GhaIndieWorker.V1.Queue",
+  "x-ores-transitions": {
+    "$comment": "Queue state transitions are runtime invariants; stale generations and fencing tokens must be rejected by the queue implementation.",
+    "queue_state": {
+      "queued": ["claimed", "cancelled", "expired"],
+      "claimed": ["running", "queued", "cancelled", "expired"],
+      "running": ["succeeded", "failed", "cancelled", "expired"],
+      "succeeded": [],
+      "failed": [],
+      "cancelled": [],
+      "expired": []
+    }
+  },
+  "$defs": {
+    "QueueState": {
+      "type": "string",
+      "enum": ["queued", "claimed", "running", "succeeded", "failed", "cancelled", "expired"]
+    },
+    "TrustTier": {
+      "type": "string",
+      "enum": ["untrusted", "standard", "trusted", "privileged"]
+    },
+    "CancellationReason": {
+      "type": "string",
+      "enum": ["user-requested", "policy", "superseded", "lease-expired"]
+    },
+    "HostedEvidenceClassification": {
+      "type": "string",
+      "enum": ["non_terminal", "stepful_success", "stepful_failure", "zero_step_runner_admission_failure", "zero_step_unknown", "cancelled"]
+    },
+    "HostedJobStatus": {
+      "type": "string",
+      "enum": ["queued", "in_progress", "completed"]
+    },
+    "HostedJobConclusion": {
+      "type": "string",
+      "enum": ["success", "failure", "cancelled", "timed_out", "neutral", "skipped", "action_required"]
+    },
+    "RunnerAdmissionReason": {
+      "type": "string",
+      "enum": ["budget_exhausted", "quota_exceeded", "no_eligible_runner", "runner_provisioning_failure", "runner_service_unavailable"]
+    },
+    "CheckState": {
+      "type": "string",
+      "enum": ["pending", "success", "failure", "error", "cancelled"]
+    },
+    "QueueJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One durable queue row for an immutable repository revision. Secret values and caller-selected shell commands are intentionally absent.",
+      "x-ores-table": "ci_queue_jobs",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["repository", "revision", "workflow_path", "profile", "attempt", "salt"]],
+      "x-ores-indexes": [["state", "available_at"], ["repository", "revision"], ["priority", "enqueued_at"]],
+      "required": ["id", "repository", "revision", "workflow_path", "profile", "state", "priority", "enqueued_at", "available_at", "attempt", "salt", "required_os", "required_arch", "required_profile", "required_features", "minimum_trust_tier"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "repository": { "type": "string", "minLength": 3, "maxLength": 140, "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$" },
+        "revision": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "workflow_path": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "profile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "state": { "$ref": "#/$defs/QueueState" },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "enqueued_at": { "type": "string", "format": "date-time" },
+        "available_at": { "type": "string", "format": "date-time" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "salt": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+        "required_os": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "required_arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "required_runtime": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "required_profile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "required_features": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
+        "minimum_trust_tier": { "$ref": "#/$defs/TrustTier" },
+        "supersedes_job_id": { "type": "string", "format": "uuid" },
+        "cancelled_at": { "type": "string", "format": "date-time" },
+        "cancellation_reason": { "$ref": "#/$defs/CancellationReason" }
+      }
+    },
+    "JobLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A renewable lease granting one worker authority over one queue job generation.",
+      "x-ores-table": "ci_job_leases",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["job_id", "generation"], ["job_id", "fencing_token"]],
+      "x-ores-indexes": [["worker_id", "expires_at"], ["expires_at"]],
+      "required": ["id", "job_id", "worker_id", "generation", "fencing_token", "attempt", "claimed_at", "heartbeat_at", "expires_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "worker_id": { "type": "string", "format": "uuid" },
+        "generation": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fencing_token": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "claimed_at": { "type": "string", "format": "date-time" },
+        "heartbeat_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "released_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ClaimReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Immutable capability evidence explaining why a worker was eligible for a claim. Capability names are retained; secret values are not.",
+      "x-ores-table": "ci_claim_receipts",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["lease_id"]],
+      "x-ores-indexes": [["worker_id", "claimed_at"]],
+      "required": ["id", "lease_id", "job_id", "worker_id", "generation", "fencing_token", "matched_os", "matched_arch", "matched_profile", "matched_features", "matched_trust_tier", "worker_max_concurrency", "worker_active_jobs", "claimed_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "lease_id": { "type": "string", "format": "uuid", "x-ores-references": "JobLease.id" },
+        "job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "worker_id": { "type": "string", "format": "uuid" },
+        "generation": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fencing_token": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "matched_os": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "matched_arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "matched_runtime": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "matched_profile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "matched_features": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
+        "matched_trust_tier": { "$ref": "#/$defs/TrustTier" },
+        "worker_max_concurrency": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "worker_active_jobs": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "claimed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "JobSupersession": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Audit record linking a cancelled stale job to the immutable replacement that superseded it.",
+      "x-ores-table": "ci_job_supersessions",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["superseded_job_id"], ["replacement_job_id"]],
+      "required": ["id", "superseded_job_id", "replacement_job_id", "created_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "superseded_job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "replacement_job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "HostedRunObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Observed hosted GitHub job evidence kept separate from independent worker execution evidence.",
+      "x-ores-table": "ci_hosted_run_observations",
+      "x-ores-primary-key": ["id"],
+      "x-ores-indexes": [["repository", "revision", "observed_at"], ["classification", "observed_at"]],
+      "required": ["id", "job_id", "repository", "revision", "github_run_id", "status", "classification", "observed_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "repository": { "type": "string", "minLength": 3, "maxLength": 140, "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$" },
+        "revision": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "github_run_id": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "github_job_id": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "status": { "$ref": "#/$defs/HostedJobStatus" },
+        "conclusion": { "$ref": "#/$defs/HostedJobConclusion" },
+        "step_count": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "classification": { "$ref": "#/$defs/HostedEvidenceClassification" },
+        "admission_reason": { "$ref": "#/$defs/RunnerAdmissionReason" },
+        "observed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ExecutionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Independent exact-lease execution evidence. Secret values are forbidden; only redacted summaries and opaque artifact identifiers belong here.",
+      "x-ores-table": "ci_execution_evidence",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["lease_id"]],
+      "x-ores-indexes": [["job_id", "lease_generation"], ["worker_id", "finished_at"]],
+      "required": ["id", "job_id", "lease_id", "worker_id", "lease_generation", "fencing_token", "runtime_backend", "os", "arch", "artifact_ids", "started_at", "finished_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "lease_id": { "type": "string", "format": "uuid", "x-ores-references": "JobLease.id" },
+        "worker_id": { "type": "string", "format": "uuid" },
+        "lease_generation": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fencing_token": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "runtime_backend": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "os": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "ores_compose_project": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "ores_compose_session": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "artifact_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+        "redacted_summary": { "type": "string", "maxLength": 2048 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CheckPublication": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One external check/status publication. Exact revision plus lease generation and fencing token prevent stale workers from publishing green.",
+      "x-ores-table": "ci_check_publications",
+      "x-ores-primary-key": ["id"],
+      "x-ores-unique": [["job_id", "lease_generation", "fencing_token", "context"]],
+      "x-ores-indexes": [["revision", "published_at"]],
+      "required": ["id", "job_id", "lease_id", "lease_generation", "fencing_token", "revision", "context", "state", "published_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "job_id": { "type": "string", "format": "uuid", "x-ores-references": "QueueJob.id" },
+        "lease_id": { "type": "string", "format": "uuid", "x-ores-references": "JobLease.id" },
+        "lease_generation": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "fencing_token": { "type": "integer", "x-ores-width": 64, "minimum": 1 },
+        "revision": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]+$" },
+        "context": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "state": { "$ref": "#/$defs/CheckState" },
+        "external_id": { "type": "string", "maxLength": 160 },
+        "published_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

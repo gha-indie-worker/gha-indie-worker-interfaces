@@ -32,7 +32,7 @@ Toolkit: [`ORESoftware/ores-contracts`](https://github.com/ORESoftware/ores-cont
 
 The toolkit's parsers are deliberately single-file: they do not follow `import`.
 That is why each slice has its own config and `main.tsp` is only for `tsp
-compile`. `npm run contracts:check:all` sweeps all ten.
+compile`. `npm run contracts:check:all` sweeps all eleven.
 
 ## Slices
 
@@ -42,6 +42,7 @@ compile`. `npm run contracts:check:all` sweeps all ten.
 | `onboarding` | `GhaIndieWorker.V1.Onboarding` | the org and user onboarding state machines and their advance request/response |
 | `runs` | `GhaIndieWorker.V1.Runs` | Plan, Run, Job, Step, LogChunk, RunCancellation, `RunStatus` |
 | `workers` | `GhaIndieWorker.V1.Workers` | Worker, Capability, Heartbeat, Profile |
+| `queue` | `GhaIndieWorker.V1.Queue` | QueueJob, JobLease, ClaimReceipt, JobSupersession, queue lifecycle and trust vocabulary |
 | `webhooks` | `GhaIndieWorker.V1.Webhooks` | GitHubDelivery envelope, RegistryImageEvent |
 | `chat` | `GhaIndieWorker.V1.Chat` | ChatSession, ChatMessage, `ChatSurface` |
 | `embeddings` | `GhaIndieWorker.V1.Embeddings` | ComparisonSpace and its twelve identity fields, EmbeddingRecord, index/search, RegressionFinding, AlertRule, MatchEvent |
@@ -108,7 +109,7 @@ directory fails the build with a message telling you where it belongs.
 
 ```sh
 npm run contracts:check          # ores-contracts on the default slice
-npm run contracts:check:all      # ores-contracts on all ten slices
+npm run contracts:check:all      # ores-contracts on all eleven slices
 npm run contracts:generate       # writes generated/<slice>/** when parity passes
 npm run lint:typespec            # tsp compile contracts/typespec --no-emit
 npm run validate:fixtures        # ajv when installed

@@ -1,0 +1,17 @@
+{
+  "$comment": "ores-contracts config for the durable queue slice. Paths resolve relative to this file. The TypeSpec and JSON Schema authorities are independently authored peers.",
+  "typespec": "../typespec/queue.tsp",
+  "jsonSchema": "../json-schema/queue.schema.json",
+  "out": "../../generated/queue",
+  "target": "../../target/ores-contracts/queue",
+  "artifacts": [
+    "sql/schema.sql",
+    "rust/types.rs",
+    "seaorm/entities.rs",
+    "diesel/schema.rs",
+    "typescript/types.d.ts",
+    "typescript/validate.mjs",
+    "dart/models.dart"
+  ],
+  "tspCompile": true
+}

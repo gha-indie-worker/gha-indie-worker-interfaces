@@ -1,4 +1,5 @@
 import "./ores.tsp";
+import "@typespec/json-schema";
 using Ores;
 
 namespace GhaIndieWorker.V1.Transport;
@@ -31,19 +32,18 @@ enum TcpFrameKind {
   Bye: "bye",
 }
 
-// Discriminated by `kind`. The peer JSON Schema authority states the same table as
-// a oneOf over `kind` consts; TypeSpec has no sum type inside the contract subset,
-// so the requirement is stated here and enforced by the runtime validator:
-//
-//   subscribe-run-logs   requires runId
-//   unsubscribe-run-logs requires runId
-//   presence             requires channel
-//   chat-event           requires sessionId, payload
-//   heartbeat            requires nothing beyond the envelope
 @doc("One websocket command as received. The union is tagged by kind; fields not named by that kind are absent.")
 @Ores.table("ws_command_audit")
 @Ores.unique("connectionId,clientSequence")
 @Ores.index("kind,sentAt")
+@TypeSpec.JsonSchema.extension("oneOf", #[
+  #{ properties: #{ kind: #{ `const`: "subscribe-run-logs" } }, required: #["kind", "runId"] },
+  #{ properties: #{ kind: #{ `const`: "unsubscribe-run-logs" } }, required: #["kind", "runId"] },
+  #{ properties: #{ kind: #{ `const`: "presence" } }, required: #["kind", "channel"] },
+  #{ properties: #{ kind: #{ `const`: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "heartbeat" } }, required: #["kind"] },
+])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model WsCommand {
   @key id: uuid;
   kind: WsCommandKind;
@@ -64,17 +64,18 @@ model WsCommand {
   sentAt: utcDateTime;
 }
 
-// Discriminated by `kind`:
-//
-//   run-log        requires runId, jobId, payload
-//   presence       requires payload
-//   chat-event     requires sessionId, payload
-//   heartbeat-ack  requires nothing beyond the envelope
-//   error          requires message
 @doc("One websocket event as emitted. The union is tagged by kind; fields not named by that kind are absent.")
 @Ores.table("ws_event_audit")
 @Ores.unique("connectionId,serverSequence")
 @Ores.index("kind,emittedAt")
+@TypeSpec.JsonSchema.extension("oneOf", #[
+  #{ properties: #{ kind: #{ `const`: "run-log" } }, required: #["kind", "runId", "jobId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "presence" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "chat-event" } }, required: #["kind", "sessionId", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "heartbeat-ack" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "error" } }, required: #["kind", "message"] },
+])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model WsEvent {
   @key id: uuid;
   kind: WsEventKind;
@@ -93,12 +94,19 @@ model WsEvent {
   emittedAt: utcDateTime;
 }
 
-// Discriminated by `kind`: hello, command and event require payload; ping, pong
-// and bye are payload-free. The codec bounds payloadBytes at 1 MiB.
 @doc("One frame on the stateful TCP avenue. payloadBytes is the decoded length and is bounded by the codec.")
 @Ores.table("tcp_frame_audit")
 @Ores.unique("connectionId,sequence")
 @Ores.index("kind,receivedAt")
+@TypeSpec.JsonSchema.extension("oneOf", #[
+  #{ properties: #{ kind: #{ `const`: "hello" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "command" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "event" } }, required: #["kind", "payload"] },
+  #{ properties: #{ kind: #{ `const`: "ping" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "pong" } }, required: #["kind"] },
+  #{ properties: #{ kind: #{ `const`: "bye" } }, required: #["kind"] },
+])
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
 model TcpFrame {
   @key id: uuid;
   kind: TcpFrameKind;
