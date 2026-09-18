@@ -18,3 +18,7 @@ tmp/
 temp/
 tmp/worktrees/
 temp/worktrees/
+
+# Python bytecode caches emitted by scripts/vendor/ridl and the check-*.py gates
+__pycache__/
+*.py[cod]
