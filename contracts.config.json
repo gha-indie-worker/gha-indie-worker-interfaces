@@ -11,6 +11,7 @@
     "onboarding",
     "runs",
     "workers",
+    "queue",
     "webhooks",
     "chat",
     "embeddings",

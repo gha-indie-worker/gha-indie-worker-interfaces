@@ -57,9 +57,11 @@ if (unknown.length) {
   process.exit(1);
 }
 
-// Current reviewed TJSV main: language/runtime boundary lockstep + fail-closed
-// multi-file reference normalization. Keep this as an exact 40-char commit.
-const tjsvRevision = 'a4b731fbf82c4d162abd74fd03758fa32bb76176';
+// Reviewed TJSV revision with safe ignored Record<T> helper comparison,
+// including the constrained Record<unknown> ref+sibling form emitted by TypeSpec.
+// Keep this as an exact 40-char commit so contract evidence cannot drift under an
+// unchanged IndieBuild source revision.
+const tjsvRevision = 'bd503465dab8c5148fee722b443ed04ff126c9bf';
 const tjsvPackage = process.env.TJSV_PACKAGE
   ?? `https://github.com/ORESoftware/typespec-json-schema-validator/archive/${tjsvRevision}.tar.gz`;
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -167,7 +169,7 @@ for (const slice of slices) {
           `--report=${resolve(reportDir, `${slice}.json`)}`,
           `--contract-ir=${resolve(contractIrDir, `${slice}.json`)}`,
           '--int64-strategy=number',
-          '--seal-object-schemas=false',
+          '--seal-object-schemas=true',
           '--format-assertion=true',
           '--probes=true',
           '--max-probes=96',

@@ -1,0 +1,20 @@
+{
+  "id": "10000006-1111-4222-8333-444455556666",
+  "repository": "gha-indie-worker/gha-indie-worker.rs",
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "workflow_path": ".github/workflows/ci.yml",
+  "profile": "rust-ci",
+  "state": "cancelled",
+  "priority": 50,
+  "enqueued_at": "2026-09-13T20:00:00Z",
+  "available_at": "2026-09-13T20:00:00Z",
+  "attempt": 1,
+  "salt": "pr-55-old-head",
+  "required_os": "linux",
+  "required_arch": "x86_64",
+  "required_profile": "rust-ci",
+  "required_features": ["rust"],
+  "minimum_trust_tier": "standard",
+  "cancelled_at": "2026-09-13T20:03:00Z",
+  "cancellation_reason": "superseded"
+}
