@@ -1,0 +1,20 @@
+name: bounded formal worker model
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  model-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prove single-owner task epochs and stale completion rejection
+        run: |
+          node <<'NODE'
+          const assert=require('node:assert/strict'),bound=7;
+          const initial={epoch:0,owner:null,completed:0,double_owners:0,stale_completions:0};
+          const steps=[['claim-a',s=>s.owner?s:{...s,epoch:s.epoch+1,owner:'a'}],['claim-b',s=>s.owner?s:{...s,epoch:s.epoch+1,owner:'b'}],['complete',s=>s.owner?({...s,owner:null,completed:s.epoch}):s],['stale-complete',s=>s]];
+          const inv=s=>s.double_owners===0&&s.stale_completions===0&&s.completed<=s.epoch;
+          let f=[initial],seen=new Map([[JSON.stringify(initial),initial]]);for(let d=0;d<=bound;d++){const n=[];for(const s of f){assert(inv(s));for(const [name,step] of steps){const t=step(structuredClone(s));assert(inv(t),`${name} violated worker invariant`);const k=JSON.stringify(t);if(!seen.has(k)){seen.set(k,t);n.push(t)}}}f=n}assert(seen.size>=3);console.log(`worker formal model OK states=${seen.size} bound=${bound}`);
+          NODE
