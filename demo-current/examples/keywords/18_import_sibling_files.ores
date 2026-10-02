@@ -4,10 +4,6 @@ import module arithmetic from "./support/sibling_math.ores";
 
 pub routine main() => void {
   val total = arithmetic.add(20, 22);
-  const [left, right] = arithmetic.pair(total);
-
   stdio.println(total);
-  stdio.println(left);
-  stdio.println(right);
   return;
 }
