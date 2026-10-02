@@ -1,0 +1,20 @@
+namespace defer_lifo_demo;
+
+pub routine main() => void {
+  stdio.stdout.write("start:");
+
+  defer || -> {
+    stdio.stdout.write("A");
+  };
+
+  defer || -> {
+    stdio.stdout.write("B");
+  };
+
+  defer || -> {
+    stdio.stdout.write("C");
+  };
+
+  stdio.stdout.write("body:");
+  return;
+}

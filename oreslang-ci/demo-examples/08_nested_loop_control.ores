@@ -1,0 +1,22 @@
+namespace nested_loop_control_demo;
+
+pub routine main() => void {
+  let visits = 0;
+
+  for (let outer = 0; outer < 3; outer = outer + 1) {
+    for (let inner = 0; inner < 5; inner = inner + 1) {
+      if inner == 1; do
+        continue;
+      fi
+
+      if inner == 3; do
+        break;
+      fi
+
+      visits = visits + 1;
+    }
+  }
+
+  stdio.println(visits);
+  return;
+}

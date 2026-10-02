@@ -1,0 +1,20 @@
+namespace for_of_control_demo;
+
+pub routine main() => void {
+  let total = 0;
+
+  for (val item of arr[1, 2, 3, 4, 5, 6]) {
+    if item == 2; do
+      continue;
+    fi
+
+    if item == 6; do
+      break;
+    fi
+
+    total = total + item;
+  }
+
+  stdio.println(total);
+  return;
+}
