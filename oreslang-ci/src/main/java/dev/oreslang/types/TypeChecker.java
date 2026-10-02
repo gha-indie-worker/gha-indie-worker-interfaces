@@ -86,10 +86,12 @@ public final class TypeChecker {
                 throw new IllegalArgumentException(
                         "'" + imported.namespace() + "' is reserved at file scope for a lifecycle callable");
             }
-            for (String name : imported.names()) {
-                if (isLifecycleCallableName(name)) {
-                    throw new IllegalArgumentException(
-                            "'" + name + "' is reserved at file scope for a lifecycle callable");
+            if (imported.kind() != Ast.ImportKind.FUNCTION) {
+                for (String name : imported.names()) {
+                    if (isLifecycleCallableName(name)) {
+                        throw new IllegalArgumentException(
+                                "'" + name + "' is reserved at file scope for a lifecycle callable");
+                    }
                 }
             }
         }
