@@ -6,6 +6,7 @@ import com.oracle.truffle.api.nodes.RootNode;
 import dev.oreslang.OresLanguage;
 import dev.oreslang.ast.Ast;
 import dev.oreslang.runtime.OresContext;
+import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.CapabilityChecker;
 import dev.oreslang.runtime.IsolatePolicy;
 
@@ -131,12 +132,35 @@ public final class OresEvalRootNode extends RootNode {
             }
 
             RuntimeException deferFailure = drainDeferred(frame);
-            if (bodyFailure != null) {
-                if (deferFailure != null) bodyFailure.addSuppressed(deferFailure);
-                throw bodyFailure;
+            RuntimeException failure = bodyFailure;
+            if (failure != null && deferFailure != null) failure.addSuppressed(deferFailure);
+            else if (failure == null) failure = deferFailure;
+
+            if (failure != null) {
+                if (failure instanceof java.util.concurrent.CancellationException) throw failure;
+                RecoveryResult recovered = recoverFailure(frame, failure);
+                if (recovered.recovered()) return recovered.value();
+                throw recovered.failure();
             }
-            if (deferFailure != null) throw deferFailure;
             return result;
+        }
+
+        private RecoveryResult recoverFailure(CallFrame frame, RuntimeException failure) {
+            RuntimeException current = failure;
+            while (!frame.recoverers.isEmpty()) {
+                Invokable recoverer = frame.recoverers.pop();
+                try {
+                    return RecoveryResult.recovered(recoverer.call(List.of(failureValue(current))));
+                } catch (RuntimeException next) {
+                    if (next != current) next.addSuppressed(current);
+                    current = next;
+                }
+            }
+            return RecoveryResult.unrecovered(current);
+        }
+
+        private Object failureValue(RuntimeException failure) {
+            return failure instanceof PanicSignal panic ? panic.value : failure;
         }
 
         private RuntimeException drainDeferred(CallFrame frame) {
@@ -190,6 +214,18 @@ public final class OresEvalRootNode extends RootNode {
                 frame.deferred.push(action);
                 return;
             }
+            if (stmt instanceof Ast.RecoverStmt recover) {
+                Object produced = eval(recover.handler(), env);
+                if (!(produced instanceof Invokable handler)) {
+                    throw new IllegalArgumentException(
+                            "recover handler must evaluate immediately to an arity-1 callable; got " + produced);
+                }
+                frame.recoverers.push(handler);
+                return;
+            }
+            if (stmt instanceof Ast.PanicStmt panic) {
+                throw new PanicSignal(eval(panic.value(), env));
+            }
             if (stmt instanceof Ast.IfStmt ifStmt) {
                 for (Ast.IfBranch branch : ifStmt.branches()) {
                     if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env, frame); return; }
@@ -201,9 +237,10 @@ public final class OresEvalRootNode extends RootNode {
                 try { executeBlock(tried.body(), env, frame); }
                 catch (ReturnSignal signal) { throw signal; }
                 catch (BreakSignal | ContinueSignal signal) { throw signal; }
+                catch (java.util.concurrent.CancellationException cancellation) { throw cancellation; }
                 catch (RuntimeException failure) {
                     Env catchEnv = new Env(env);
-                    catchEnv.define(tried.errorName(), failure, Ast.BindingKind.VAL);
+                    catchEnv.define(tried.errorName(), failureValue(failure), Ast.BindingKind.VAL);
                     executeBlock(tried.catchBody(), catchEnv, frame);
                 } finally { executeBlock(tried.finallyBody(), env, frame); }
                 return;
@@ -380,6 +417,24 @@ public final class OresEvalRootNode extends RootNode {
                 }
                 return Map.copyOf(result);
             }
+            if (expr instanceof Ast.ActorExpr actor) {
+                Ast.LambdaExpr behavior = actor.behavior();
+                if (behavior.parameters().size() != 1) {
+                    throw new IllegalArgumentException("actor behavior requires exactly one mailbox message parameter");
+                }
+                Env captured = env.snapshot();
+                Ast.Param messageParam = behavior.parameters().getFirst();
+                ActorRuntime.ActorKind kind = actor.mode() == Ast.ActorMode.ISOLATE
+                        ? ActorRuntime.ActorKind.ISOLATE
+                        : ActorRuntime.ActorKind.SHARED;
+
+                return context.actors().spawn(kind, () -> (message, actorContext) -> {
+                    Env local = new Env(captured);
+                    local.define(messageParam.name(), message,
+                            messageParam.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
+                    executeCallableBody(behavior.blockBody(), local);
+                });
+            }
             if (expr instanceof Ast.LambdaExpr lambda) {
                 Env captured = env.snapshot();
                 return (Invokable) args -> {
@@ -418,6 +473,31 @@ public final class OresEvalRootNode extends RootNode {
                     case "descriptor" -> process.descriptor();
                     case "share_readonly" -> (Invokable) process::shareReadonly;
                     default -> throw new IllegalArgumentException("unknown process member " + name);
+                };
+            }
+            if (receiver instanceof ActorRuntime.ActorRef<?> actor) {
+                return switch (name) {
+                    case "send" -> (Invokable) args -> {
+                        requireOne(args, "actor.send");
+                        @SuppressWarnings("unchecked")
+                        ActorRuntime.ActorRef<Object> typed = (ActorRuntime.ActorRef<Object>) actor;
+                        typed.send(args.getFirst());
+                        return null;
+                    };
+                    case "stop" -> (Invokable) args -> {
+                        requireZero(args, "actor.stop");
+                        actor.stop();
+                        return null;
+                    };
+                    case "join" -> (Invokable) args -> {
+                        requireZero(args, "actor.join");
+                        actor.join();
+                        return null;
+                    };
+                    case "alive" -> actor.isAlive();
+                    case "failed" -> actor.failed();
+                    case "kind" -> actor.kind().name().toLowerCase();
+                    default -> throw new IllegalArgumentException("unknown actor member " + name);
                 };
             }
             if (receiver instanceof ModuleFacade namespace) return moduleMember(namespace.module, name);
@@ -644,6 +724,16 @@ public final class OresEvalRootNode extends RootNode {
 
     private static final class CallFrame {
         private final ArrayDeque<Invokable> deferred = new ArrayDeque<>();
+        private final ArrayDeque<Invokable> recoverers = new ArrayDeque<>();
+    }
+
+    private record RecoveryResult(boolean recovered, Object value, RuntimeException failure) {
+        private static RecoveryResult recovered(Object value) {
+            return new RecoveryResult(true, value, null);
+        }
+        private static RecoveryResult unrecovered(RuntimeException failure) {
+            return new RecoveryResult(false, null, failure);
+        }
     }
 
     private static final class Env {
@@ -697,6 +787,14 @@ public final class OresEvalRootNode extends RootNode {
         private ContinueSignal() { super(null, null, false, false); }
     }
 
+    private static final class PanicSignal extends RuntimeException {
+        private final Object value;
+        private PanicSignal(Object value) {
+            super("panic: " + String.valueOf(value), null, true, false);
+            this.value = value;
+        }
+    }
+
     private record Complex(double real, double imaginary) {
         private Complex add(Complex o){return new Complex(real+o.real,imaginary+o.imaginary);}
         private Complex sub(Complex o){return new Complex(real-o.real,imaginary-o.imaginary);}
@@ -730,4 +828,5 @@ public final class OresEvalRootNode extends RootNode {
         private Object shareReadonly(List<Object> args){context.requireCapability(IsolatePolicy.Capability.ACTOR_SHARE_READONLY,"process.share_readonly");requireOne(args,"process.share_readonly");return context.actors().shareReadonly(args.getFirst());}
     }
     private static void requireOne(List<Object> args,String name){if(args.size()!=1)throw new IllegalArgumentException(name+" expects one argument");}
+    private static void requireZero(List<Object> args,String name){if(!args.isEmpty())throw new IllegalArgumentException(name+" expects no arguments");}
 }
