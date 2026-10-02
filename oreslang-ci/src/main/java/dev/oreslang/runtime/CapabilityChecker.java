@@ -13,8 +13,13 @@ public final class CapabilityChecker {
 
     public static void check(Ast.Program program, IsolatePolicy policy) {
         for (Ast.ModuleDecl module : program.modules()) {
+            if (module.singleton()) {
+                require(policy, IsolatePolicy.Capability.PROCESS_SINGLETON,
+                        "singleton module " + module.name());
+            }
             for (Ast.Decl declaration : module.declarations()) {
                 if (declaration instanceof Ast.FunctionDecl fn) checkStatements(fn.body(), policy);
+                else if (declaration instanceof Ast.InitDecl init) checkStatements(init.body(), policy);
                 else if (declaration instanceof Ast.ClassDecl klass) {
                     for (Ast.FieldDecl field : klass.fields()) if (field.initializer() != null) checkExpr(field.initializer(), policy);
                     for (Ast.MethodDecl method : klass.methods()) checkStatements(method.body(), policy);
@@ -32,8 +37,6 @@ public final class CapabilityChecker {
             else if (stmt instanceof Ast.ReturnStmt s && s.value() != null) checkExpr(s.value(), policy);
             else if (stmt instanceof Ast.ExprStmt s) checkExpr(s.expression(), policy);
             else if (stmt instanceof Ast.DeferStmt s) checkExpr(s.expression(), policy);
-            else if (stmt instanceof Ast.RecoverStmt s) checkExpr(s.handler(), policy);
-            else if (stmt instanceof Ast.PanicStmt s) checkExpr(s.value(), policy);
             else if (stmt instanceof Ast.IfStmt s) {
                 for (Ast.IfBranch b : s.branches()) {
                     checkExpr(b.condition(), policy);
@@ -90,9 +93,6 @@ public final class CapabilityChecker {
         else if (expr instanceof Ast.LambdaExpr e) {
             if (e.expressionBody() != null) checkExpr(e.expressionBody(), policy);
             if (e.blockBody() != null) checkStatements(e.blockBody(), policy);
-        } else if (expr instanceof Ast.ActorExpr e) {
-            if (e.behavior().expressionBody() != null) checkExpr(e.behavior().expressionBody(), policy);
-            if (e.behavior().blockBody() != null) checkStatements(e.behavior().blockBody(), policy);
         }
     }
 

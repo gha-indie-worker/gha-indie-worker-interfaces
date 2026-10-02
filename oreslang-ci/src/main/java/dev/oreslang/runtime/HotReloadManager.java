@@ -26,9 +26,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * No JNI/FFI or OS dynamic-library loading is required.
  */
 public final class HotReloadManager implements AutoCloseable {
+    private static final AtomicLong PROCESS_GENERATION_SEQUENCE = new AtomicLong();
+
     private final IsolatePolicy policy;
     private final ExecutionProfile executionProfile;
-    private final AtomicLong sequence = new AtomicLong();
     private final AtomicReference<Generation> active = new AtomicReference<>();
     private final Map<String, Generation> activeByCodeUnit = new LinkedHashMap<>();
     private final Map<Long, Generation> generations = new LinkedHashMap<>();
@@ -60,13 +61,16 @@ public final class HotReloadManager implements AutoCloseable {
     }
 
     private Generation stage(String codeUnitId, String sourceDigest, String sourceText) {
-        long id = sequence.incrementAndGet();
-        Context context = policy.restrictedContextBuilder(executionProfile).build();
+        long id = PROCESS_GENERATION_SEQUENCE.incrementAndGet();
+        Context context = policy.restrictedContextBuilder(
+                executionProfile,
+                "--ores-code-generation=" + id).build();
         try {
             Source source = Source.newBuilder(OresLanguage.ID, sourceText, codeUnitId)
                     .mimeType(OresLanguage.MIME_TYPE)
                     .buildLiteral();
-            Generation generation = new Generation(id, codeUnitId, sourceDigest, context, source, executionProfile);
+            Generation generation = new Generation(
+                    this, id, codeUnitId, sourceDigest, context, source, executionProfile);
             generations.put(id, generation);
             activeByCodeUnit.put(codeUnitId, generation);
             active.set(generation);
@@ -97,22 +101,56 @@ public final class HotReloadManager implements AutoCloseable {
 
     /** Explicit retirement permits old actors/requests to drain before teardown. */
     public synchronized void retire(long generationId) {
-        Generation generation = generations.remove(generationId);
-        if (generation != null) {
-            active.compareAndSet(generation, null);
-            activeByCodeUnit.remove(generation.codeUnitId(), generation);
-            generation.close();
+        Generation generation = generations.get(generationId);
+        if (generation == null) return;
+        detach(generation);
+        generation.closeContextOnly();
+    }
+
+    private synchronized void failedStart(Generation generation) {
+        if (generations.get(generation.id()) == generation) detach(generation);
+        generation.closeContextOnly();
+    }
+
+    private void detach(Generation generation) {
+        generations.remove(generation.id(), generation);
+
+        if (activeByCodeUnit.get(generation.codeUnitId()) == generation) {
+            Generation replacement = latestLiveForCodeUnit(generation.codeUnitId());
+            if (replacement == null) activeByCodeUnit.remove(generation.codeUnitId(), generation);
+            else activeByCodeUnit.put(generation.codeUnitId(), replacement);
         }
+
+        if (active.get() == generation) active.set(latestLiveGeneration());
+    }
+
+    private Generation latestLiveForCodeUnit(String codeUnitId) {
+        Generation latest = null;
+        for (Generation candidate : generations.values()) {
+            if (!candidate.codeUnitId().equals(codeUnitId) || candidate.closed()) continue;
+            if (latest == null || candidate.id() > latest.id()) latest = candidate;
+        }
+        return latest;
+    }
+
+    private Generation latestLiveGeneration() {
+        Generation latest = null;
+        for (Generation candidate : generations.values()) {
+            if (candidate.closed()) continue;
+            if (latest == null || candidate.id() > latest.id()) latest = candidate;
+        }
+        return latest;
     }
 
     public synchronized int liveGenerations() { return generations.size(); }
 
     @Override
     public synchronized void close() {
-        for (Generation generation : generations.values()) generation.close();
+        Generation[] live = generations.values().toArray(Generation[]::new);
         generations.clear();
         activeByCodeUnit.clear();
         active.set(null);
+        for (Generation generation : live) generation.closeContextOnly();
     }
 
     private static String digest(String text) {
@@ -125,6 +163,7 @@ public final class HotReloadManager implements AutoCloseable {
     }
 
     public static final class Generation implements AutoCloseable {
+        private final HotReloadManager owner;
         private final long id;
         private final String codeUnitId;
         private final String sha256;
@@ -134,7 +173,15 @@ public final class HotReloadManager implements AutoCloseable {
         private final AtomicBoolean started = new AtomicBoolean();
         private final AtomicBoolean closed = new AtomicBoolean();
 
-        private Generation(long id, String codeUnitId, String sha256, Context context, Source source, ExecutionProfile executionProfile) {
+        private Generation(
+                HotReloadManager owner,
+                long id,
+                String codeUnitId,
+                String sha256,
+                Context context,
+                Source source,
+                ExecutionProfile executionProfile) {
+            this.owner = owner;
             this.id = id;
             this.codeUnitId = codeUnitId;
             this.sha256 = sha256;
@@ -159,14 +206,18 @@ public final class HotReloadManager implements AutoCloseable {
             try {
                 return context.eval(source);
             } catch (RuntimeException failure) {
-                close();
+                owner.failedStart(this);
                 throw failure;
             }
         }
 
+        private void closeContextOnly() {
+            if (closed.compareAndSet(false, true)) context.close(true);
+        }
+
         @Override
         public void close() {
-            if (closed.compareAndSet(false, true)) context.close(true);
+            owner.retire(id);
         }
     }
 }

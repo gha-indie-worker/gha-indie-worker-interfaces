@@ -1,6 +1,7 @@
 package dev.oreslang.types;
 
 import dev.oreslang.ast.Ast;
+import dev.oreslang.parser.Parser;
 import dev.oreslang.types.Types.Function;
 import dev.oreslang.types.Types.Borrow;
 import dev.oreslang.types.Types.ClassNamespace;
@@ -9,6 +10,7 @@ import dev.oreslang.types.Types.ListType;
 import dev.oreslang.types.Types.Named;
 import dev.oreslang.types.Types.Primitive;
 import dev.oreslang.types.Types.Record;
+import dev.oreslang.types.Types.SingletonProxy;
 import dev.oreslang.types.Types.StringLiteral;
 import dev.oreslang.types.Types.Tuple;
 import dev.oreslang.types.Types.Type;
@@ -42,10 +44,12 @@ public final class TypeChecker {
     private final Set<String> ambiguousInterfaces = new HashSet<>();
     private final Set<String> ambiguousTypeAliases = new HashSet<>();
     private final Set<String> importedValues = new HashSet<>();
+    private final Set<String> importedNames = new HashSet<>();
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<Ast.ClassDecl> processEffectCheckedClasses =
+            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     public static Ast.Program check(Ast.Program program) {
-        ReservedIdentifierValidator.check(program);
         TypeChecker checker = new TypeChecker();
         checker.validateImports(program);
         checker.collect(program);
@@ -62,11 +66,13 @@ public final class TypeChecker {
             if (imported.wildcard()) {
                 if (imported.namespace() == null || imported.namespace().isBlank()) throw new IllegalArgumentException("wildcard imports require a namespace alias");
                 if (!exposed.add(imported.namespace())) throw new IllegalArgumentException("duplicate imported name '" + imported.namespace() + "'");
+                importedNames.add(imported.namespace());
                 importedValues.add(imported.namespace());
             } else {
                 if (imported.names().isEmpty()) throw new IllegalArgumentException("named import must select at least one name");
                 for (String name : imported.names()) {
                     if (!exposed.add(name)) throw new IllegalArgumentException("duplicate imported name '" + name + "'");
+                    importedNames.add(name);
                     if (imported.kind() != Ast.ImportKind.CLASS) importedValues.add(name);
                 }
             }
@@ -106,130 +112,36 @@ public final class TypeChecker {
     }
 
     private void validate(Ast.Program program) {
-        validateLoopControl(program);
         for (Ast.ClassDecl klass : classOwners.keySet()) classShape(klass, new LinkedHashSet<>());
         for (Ast.InterfaceDecl iface : interfaceOwners.keySet()) interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
 
         for (Ast.ModuleDecl module : program.modules()) {
             checkModuleAdherence(module);
+            long initCount = module.declarations().stream().filter(Ast.InitDecl.class::isInstance).count();
+            if (initCount > 1) {
+                String scope = module.name().equals(Parser.ROOT_MODULE) ? "source file" : "module '" + module.name() + "'";
+                throw new IllegalArgumentException(scope + " may declare at most one init routine");
+            }
+            if (module.singleton()) validateSingletonModule(module);
             for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl fn) checkFunction(module.name(), fn);
+                if (decl instanceof Ast.FunctionDecl fn) checkFunction(module, fn);
+                else if (decl instanceof Ast.InitDecl init) checkInit(module, init);
                 else if (decl instanceof Ast.ClassDecl klass) checkClass(module.name(), klass);
                 else if (decl instanceof Ast.InterfaceDecl iface) checkInterface(iface);
                 else if (decl instanceof Ast.TypeAliasDecl alias) resolve(alias.target(), Set.copyOf(alias.genericParameters()), null);
-                else if (decl instanceof Ast.FieldDecl field) checkModuleBinding(field);
+                else if (decl instanceof Ast.FieldDecl field) checkModuleBinding(module, field);
             }
-        }
-    }
-
-    private void validateLoopControl(Ast.Program program) {
-        for (Ast.ModuleDecl module : program.modules()) {
-            for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl fn) {
-                    validateLoopControlBlock(fn.body(), 0);
-                } else if (decl instanceof Ast.ClassDecl klass) {
-                    for (Ast.MethodDecl method : klass.methods()) {
-                        validateLoopControlBlock(method.body(), 0);
-                    }
-                    for (Ast.FieldDecl field : klass.fields()) {
-                        if (field.initializer() != null) validateLoopControlExpr(field.initializer());
-                    }
-                } else if (decl instanceof Ast.FieldDecl field && field.initializer() != null) {
-                    validateLoopControlExpr(field.initializer());
-                }
-            }
-        }
-    }
-
-    private void validateLoopControlBlock(List<Ast.Stmt> body, int loopDepth) {
-        for (Ast.Stmt stmt : body) {
-            if (stmt instanceof Ast.BreakStmt) {
-                if (loopDepth == 0) throw new IllegalArgumentException("'break' is only valid inside a loop");
-                continue;
-            }
-            if (stmt instanceof Ast.ContinueStmt) {
-                if (loopDepth == 0) throw new IllegalArgumentException("'continue' is only valid inside a loop");
-                continue;
-            }
-            if (stmt instanceof Ast.BindingStmt binding) {
-                validateLoopControlExpr(binding.initializer());
-            } else if (stmt instanceof Ast.DestructureStmt destructure) {
-                validateLoopControlExpr(destructure.initializer());
-            } else if (stmt instanceof Ast.ReturnStmt ret && ret.value() != null) {
-                validateLoopControlExpr(ret.value());
-            } else if (stmt instanceof Ast.ExprStmt expression) {
-                validateLoopControlExpr(expression.expression());
-            } else if (stmt instanceof Ast.DeferStmt defer) {
-                validateLoopControlExpr(defer.expression());
-            } else if (stmt instanceof Ast.RecoverStmt recover) {
-                validateLoopControlExpr(recover.handler());
-            } else if (stmt instanceof Ast.PanicStmt panic) {
-                validateLoopControlExpr(panic.value());
-            } else if (stmt instanceof Ast.IfStmt conditional) {
-                for (Ast.IfBranch branch : conditional.branches()) {
-                    validateLoopControlExpr(branch.condition());
-                    validateLoopControlBlock(branch.body(), loopDepth);
-                }
-                validateLoopControlBlock(conditional.elseBody(), loopDepth);
-            } else if (stmt instanceof Ast.TryStmt attempted) {
-                validateLoopControlBlock(attempted.body(), loopDepth);
-                validateLoopControlBlock(attempted.catchBody(), loopDepth);
-                validateLoopControlBlock(attempted.finallyBody(), loopDepth);
-            } else if (stmt instanceof Ast.ForOfStmt loop) {
-                validateLoopControlExpr(loop.iterable());
-                validateLoopControlBlock(loop.body(), loopDepth + 1);
-            } else if (stmt instanceof Ast.ForStmt loop) {
-                if (loop.initializer() != null) validateLoopControlBlock(List.of(loop.initializer()), loopDepth);
-                if (loop.condition() != null) validateLoopControlExpr(loop.condition());
-                if (loop.update() != null) validateLoopControlExpr(loop.update());
-                validateLoopControlBlock(loop.body(), loopDepth + 1);
-            }
-        }
-    }
-
-    private void validateLoopControlExpr(Ast.Expr expr) {
-        if (expr instanceof Ast.BinaryExpr e) {
-            validateLoopControlExpr(e.left());
-            validateLoopControlExpr(e.right());
-        } else if (expr instanceof Ast.UnaryExpr e) {
-            validateLoopControlExpr(e.operand());
-        } else if (expr instanceof Ast.AssignExpr e) {
-            validateLoopControlExpr(e.target());
-            validateLoopControlExpr(e.value());
-        } else if (expr instanceof Ast.ConditionalExpr e) {
-            validateLoopControlExpr(e.condition());
-            validateLoopControlExpr(e.whenTrue());
-            validateLoopControlExpr(e.whenFalse());
-        } else if (expr instanceof Ast.CallExpr e) {
-            validateLoopControlExpr(e.callee());
-            for (Ast.Expr argument : e.arguments()) validateLoopControlExpr(argument);
-        } else if (expr instanceof Ast.MemberExpr e) {
-            validateLoopControlExpr(e.receiver());
-        } else if (expr instanceof Ast.IndexExpr e) {
-            validateLoopControlExpr(e.receiver());
-            validateLoopControlExpr(e.index());
-        } else if (expr instanceof Ast.NewExpr e) {
-            for (Ast.Expr argument : e.arguments()) validateLoopControlExpr(argument);
-        } else if (expr instanceof Ast.AwaitExpr e) {
-            validateLoopControlExpr(e.expression());
-        } else if (expr instanceof Ast.ListExpr e) {
-            for (Ast.Expr item : e.elements()) validateLoopControlExpr(item);
-        } else if (expr instanceof Ast.TupleExpr e) {
-            for (Ast.Expr item : e.elements()) validateLoopControlExpr(item);
-        } else if (expr instanceof Ast.ObjectExpr e) {
-            for (Ast.ObjectField field : e.fields()) validateLoopControlExpr(field.value());
-        } else if (expr instanceof Ast.LambdaExpr e) {
-            // A lambda is a new callable boundary: it cannot break/continue an outer loop.
-            validateLoopControlBlock(e.blockBody(), 0);
-        } else if (expr instanceof Ast.ActorExpr e) {
-            // An actor behavior is also a callable boundary.
-            validateLoopControlBlock(e.behavior().blockBody(), 0);
         }
     }
 
     private void checkModuleAdherence(Ast.ModuleDecl module) {
         for (Ast.Annotation annotation : module.annotations()) {
             if (!annotation.name().equals("AdheresTo")) continue;
+            if (module.singleton()) {
+                throw new IllegalArgumentException("singleton module '" + module.name()
+                        + "' cannot use ordinary @AdheresTo interfaces because its external surface is asynchronous;"
+                        + " define a service/singleton interface kind before advertising synchronous conformance");
+            }
             if (annotation.arguments().isEmpty()) throw new IllegalArgumentException("@AdheresTo requires at least one interface");
             Record actual = moduleShape(module);
             for (Ast.TypeRef ref : annotation.arguments()) {
@@ -247,7 +159,7 @@ public final class TypeChecker {
         Map<String, Type> members = new LinkedHashMap<>();
         for (Ast.Decl decl : module.declarations()) {
             if (decl instanceof Ast.FunctionDecl fn && fn.visibility() == Ast.Visibility.PUBLIC) {
-                Type signature = callableValueType(fn);
+                Type signature = functionType(fn.parameters(), fn.returnType(), Set.copyOf(fn.genericParameters()), null);
                 mergeMember(members, fn.name(), signature, "module " + module.name());
                 mergeMember(members, methodKey(fn.name(), fn.parameters().size()), signature, "module " + module.name());
             } else if (decl instanceof Ast.FieldDecl field && field.visibility() == Ast.Visibility.PUBLIC) {
@@ -282,32 +194,743 @@ public final class TypeChecker {
         }
     }
 
-    private void checkFunction(String module, Ast.FunctionDecl fn) {
+    private void checkInit(Ast.ModuleDecl module, Ast.InitDecl init) {
+        Env env = module.singleton() ? singletonModuleEnv(module) : moduleBindingEnv(module);
+        if (module.singleton()) validatePureSingletonInit(module, init);
+        validateSingletonTransportStatements(init.body(), module.name());
+        checkBlock(init.body(), env, Set.of(), Primitive.VOID, null);
+    }
+
+    /**
+     * Process init cannot inherit ambient authority from whichever actor or
+     * tenant first touches the singleton. Keep it deterministic and confined
+     * to already-declared singleton state until a supervisor-owned init
+     * capability model exists.
+     */
+    private void validatePureSingletonInit(Ast.ModuleDecl module, Ast.InitDecl init) {
+        Set<String> names = new LinkedHashSet<>();
+        for (Ast.Decl decl : module.declarations()) {
+            if (decl instanceof Ast.FieldDecl field) names.add(field.name());
+        }
+        validatePureSingletonInitStatements(module, init.body(), names);
+    }
+
+    private void validatePureSingletonInitStatements(
+            Ast.ModuleDecl module,
+            List<Ast.Stmt> statements,
+            Set<String> visibleNames) {
+        Set<String> names = new LinkedHashSet<>(visibleNames);
+        for (Ast.Stmt stmt : statements) {
+            if (stmt instanceof Ast.BindingStmt binding) {
+                if (!isPureSingletonInitializer(binding.initializer(), names)) {
+                    throw impureSingletonInit(module, "local binding '" + binding.name() + "'");
+                }
+                names.add(binding.name());
+                continue;
+            }
+            if (stmt instanceof Ast.ExprStmt expression
+                    && expression.expression() instanceof Ast.AssignExpr assignment
+                    && assignment.target() instanceof Ast.NameExpr target
+                    && names.contains(target.name())
+                    && isPureSingletonInitializer(assignment.value(), names)) {
+                continue;
+            }
+            if (stmt instanceof Ast.ReturnStmt ret && ret.value() == null) continue;
+            if (stmt instanceof Ast.IfStmt conditional) {
+                for (Ast.IfBranch branch : conditional.branches()) {
+                    if (!isPureSingletonInitializer(branch.condition(), names)) {
+                        throw impureSingletonInit(module, "if condition");
+                    }
+                    validatePureSingletonInitStatements(module, branch.body(), names);
+                }
+                validatePureSingletonInitStatements(module, conditional.elseBody(), names);
+                continue;
+            }
+            throw impureSingletonInit(module, stmt.getClass().getSimpleName());
+        }
+    }
+
+    private IllegalArgumentException impureSingletonInit(Ast.ModuleDecl module, String construct) {
+        return new IllegalArgumentException("singleton init routine '" + module.name()
+                + "' must be deterministic and context-free; " + construct
+                + " would make process state depend on the first caller");
+    }
+
+    private Env moduleBindingEnv(Ast.ModuleDecl module) {
+        Env env = new Env(null, module.name());
+        for (Ast.Decl decl : module.declarations()) {
+            if (!(decl instanceof Ast.FieldDecl field)) continue;
+            if (field.initializer() == null) {
+                throw new IllegalArgumentException("module binding '" + module.name() + "." + field.name() + "' requires an initializer");
+            }
+            Type actual = typeOf(field.initializer(), env, Set.of(), null);
+            Type declared = field.type() == null ? actual : resolve(field.type(), Set.of(), null);
+            requireAssignable(actual, declared, "initializer for " + module.name() + "." + field.name());
+            env.define(field.name(), declared, field.bindingKind());
+        }
+        return env;
+    }
+
+    private void checkFunction(Ast.ModuleDecl module, Ast.FunctionDecl fn) {
         Set<String> generics = uniqueGenerics(fn.genericParameters(), (fn.kind() == Ast.CallableKind.ROUTINE ? "routine " : "function ") + fn.name());
-        Env env = new Env(null);
+        Env env = module.singleton() ? singletonModuleEnv(module) : moduleBindingEnv(module);
         for (Ast.Param param : fn.parameters()) env.define(param.name(), resolveParam(param, generics, null), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
         Type returns = resolve(fn.returnType(), generics, null);
-        if (isActorCallable(fn) && fn.name().equals("main")) {
-            throw new IllegalArgumentException(
-                    "main is the root/process entrypoint and cannot be declared actor; spawn actor callables from main");
-        }
-        if (isActorCallable(fn) && fn.async()) {
-            throw new IllegalArgumentException(
-                    "actor " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name()
-                            + "' cannot also be async; actor already defines the execution boundary");
-        }
-        if (isActorCallable(fn) && returns != Primitive.VOID) {
-            throw new IllegalArgumentException(
-                    "actor " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name()
-                            + "' must declare void; calling it returns ActorTask");
-        }
+        validateSingletonTransportStatements(fn.body(), module.name());
         checkBlock(fn.body(), env, generics, returns, null);
         if (returns != Primitive.VOID && !definitelyReturns(fn.body())) {
-            throw new IllegalArgumentException("non-void " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name() + "' must explicitly return on every path");
+            throw new IllegalArgumentException("non-void " + fn.kind().name().toLowerCase() + " '" + module.name() + "." + fn.name() + "' must explicitly return on every path");
         }
         if (fn.visibility() == Ast.Visibility.PUBLIC && hasInferredArgs(fn.returnType())) {
             throw new IllegalArgumentException("public callable '" + fn.name() + "' cannot export unresolved <> type arguments");
         }
+    }
+
+    private Env singletonModuleEnv(Ast.ModuleDecl module) {
+        Env env = new Env(null, module.name());
+        for (Ast.Decl decl : module.declarations()) {
+            if (!(decl instanceof Ast.FieldDecl field)) continue;
+            if (field.initializer() == null) {
+                throw new IllegalArgumentException("singleton module binding '" + module.name() + "." + field.name() + "' requires an initializer");
+            }
+            Type actual = typeOf(field.initializer(), env, Set.of(), null);
+            Type declared = field.type() == null ? actual : resolve(field.type(), Set.of(), null);
+            requireAssignable(actual, declared, "initializer for " + module.name() + "." + field.name());
+            env.define(field.name(), declared, field.bindingKind());
+        }
+        return env;
+    }
+
+    private void validateSingletonModule(Ast.ModuleDecl module) {
+        Set<String> initializedFields = new LinkedHashSet<>();
+        for (Ast.Decl decl : module.declarations()) {
+            if (decl instanceof Ast.FieldDecl field) {
+                if (field.type() == null) {
+                    throw new IllegalArgumentException("singleton module field '" + module.name() + "." + field.name()
+                            + "' requires an explicit type so process-lifetime state has a stable hot-reload schema");
+                }
+                if (containsTypeAlias(field.type())) {
+                    throw new IllegalArgumentException("singleton module field '" + module.name() + "." + field.name()
+                            + "' cannot use type aliases in process-lifetime state; spell the stable storage type explicitly");
+                }
+
+                Ast.ClassDecl proxyClass = singletonProxyClass(field);
+                boolean exportedProxy = field.visibility() == Ast.Visibility.PUBLIC && proxyClass != null;
+                if (field.visibility() == Ast.Visibility.PUBLIC && !exportedProxy) {
+                    throw new IllegalArgumentException("singleton module field '" + module.name() + "." + field.name()
+                            + "' cannot be public unless it is an immutable class-instance proxy");
+                }
+
+                if (exportedProxy) {
+                    if (field.bindingKind() == Ast.BindingKind.LET) {
+                        throw new IllegalArgumentException("exported singleton object '" + module.name() + "." + field.name()
+                                + "' must use val or const so the process-wide capability cannot be rebound");
+                    }
+                    validateSingletonProxyClass(module, field, proxyClass);
+                    if (!isPureSingletonProxyInitializer(field.initializer(), proxyClass, initializedFields)) {
+                        throw new IllegalArgumentException("exported singleton object '" + module.name() + "." + field.name()
+                                + "' must be initialized with a context-free 'new " + proxyClass.name() + "(...)'");
+                    }
+                } else {
+                    Type stateType = resolve(field.type(), Set.of(), null);
+                    if (!isProcessStableStateType(stateType)) {
+                        throw new IllegalArgumentException("singleton module field '" + module.name() + "." + field.name()
+                                + "' uses process-unstable state type " + field.type()
+                                + "; use scalars, Option<T>, or Array/List<T> of stable values");
+                    }
+                    if (field.initializer() == null
+                            || !isPureSingletonInitializer(field.initializer(), initializedFields)) {
+                        throw new IllegalArgumentException("singleton module field '" + module.name() + "." + field.name()
+                                + "' requires a context-free initializer; singleton initialization cannot call functions,"
+                                + " access capabilities, await work, construct arbitrary classes, or mutate state");
+                    }
+                }
+                initializedFields.add(field.name());
+            }
+
+            if (decl instanceof Ast.FunctionDecl fn && fn.visibility() == Ast.Visibility.PUBLIC) {
+                if (fn.async()) {
+                    throw new IllegalArgumentException("singleton callable '" + module.name() + "." + fn.name()
+                            + "' cannot be declared async; the actor transport already supplies Future<T>");
+                }
+                if (!fn.genericParameters().isEmpty()) {
+                    throw new IllegalArgumentException("singleton callable '" + module.name() + "." + fn.name()
+                            + "' cannot be generic until Oreslang has explicit Send constraints");
+                }
+
+                Set<String> generics = Set.copyOf(fn.genericParameters());
+                for (Ast.Param param : fn.parameters()) {
+                    if (param.structural()) {
+                        throw new IllegalArgumentException("singleton callable '" + module.name() + "." + fn.name()
+                                + "' cannot use structural parameters until structural Send is explicit");
+                    }
+                    Type parameter = resolveParam(param, generics, null);
+                    if (!isActorSendableType(parameter, false)) {
+                        throw new IllegalArgumentException("singleton callable '" + module.name() + "." + fn.name()
+                                + "' parameter '" + param.name() + "' is not statically Sendable: " + param.type());
+                    }
+                }
+                Type result = resolve(fn.returnType(), generics, null);
+                if (!isActorSendableType(result, true)) {
+                    throw new IllegalArgumentException("singleton callable '" + module.name() + "." + fn.name()
+                            + "' result is not statically Sendable: " + fn.returnType());
+                }
+            }
+        }
+        validateProcessOwnedModuleEffects(module);
+    }
+
+    private Ast.ClassDecl singletonProxyClass(Ast.FieldDecl field) {
+        if (field.type() == null || !field.type().arguments().isEmpty()) return null;
+        return findClass(field.type().name());
+    }
+
+    private boolean isPureSingletonProxyInitializer(
+            Ast.Expr initializer,
+            Ast.ClassDecl klass,
+            Set<String> initializedFields) {
+        if (!(initializer instanceof Ast.NewExpr created)) return false;
+        Ast.ClassDecl createdClass = findClass(created.type().name());
+        if (createdClass != klass) return false;
+        if (created.arguments().stream().anyMatch(arg -> !isPureSingletonInitializer(arg, initializedFields))) {
+            return false;
+        }
+        for (Ast.FieldDecl classField : effectiveFields(klass, new LinkedHashSet<>())) {
+            if (classField.type() == null) return false;
+            Type fieldType = resolve(classField.type(), Set.copyOf(klass.genericParameters()), nominalClassType(klass));
+            if (!isProcessStableStateType(fieldType)) return false;
+            if (classField.initializer() != null
+                    && !isPureSingletonInitializer(classField.initializer(), Set.of())) return false;
+        }
+        return true;
+    }
+
+    private void validateSingletonProxyClass(
+            Ast.ModuleDecl owner,
+            Ast.FieldDecl exportedField,
+            Ast.ClassDecl klass) {
+        if (!klass.parents().isEmpty()) {
+            throw new IllegalArgumentException("exported singleton object '" + owner.name() + "."
+                    + exportedField.name()
+                    + "' cannot use class inheritance until inherited proxy methods are flattened and Send-checked");
+        }
+        if (!klass.genericParameters().isEmpty()) {
+            throw new IllegalArgumentException("exported singleton object '" + owner.name() + "." + exportedField.name()
+                    + "' cannot use a generic class until proxy Send constraints are explicit");
+        }
+
+        for (Ast.FieldDecl classField : klass.fields()) {
+            if (classField.type() == null) {
+                throw new IllegalArgumentException("singleton proxy storage field '" + klass.name() + "."
+                        + classField.name() + "' requires an explicit process-stable type");
+            }
+            if (containsTypeAlias(classField.type())) {
+                throw new IllegalArgumentException("singleton proxy storage field '" + klass.name() + "."
+                        + classField.name()
+                        + "' cannot use type aliases in process-lifetime state; spell the storage type explicitly");
+            }
+        }
+
+        for (Ast.MethodDecl method : klass.methods()) {
+            if (method.isStatic() || method.visibility() != Ast.Visibility.PUBLIC) continue;
+            if (method.async()) {
+                throw new IllegalArgumentException("singleton proxy method '" + klass.name() + "." + method.name()
+                        + "' cannot be async; mailbox transport already returns Future<T>");
+            }
+            if (!method.genericParameters().isEmpty()) {
+                throw new IllegalArgumentException("singleton proxy method '" + klass.name() + "." + method.name()
+                        + "' cannot be generic until proxy Send constraints are explicit");
+            }
+            for (Ast.Param param : method.parameters()) {
+                if (param.structural()) {
+                    throw new IllegalArgumentException("singleton proxy method '" + klass.name() + "." + method.name()
+                            + "' cannot use structural transported parameters");
+                }
+                Type parameter = resolveParam(param, Set.of(), nominalClassType(klass));
+                if (!isActorSendableType(parameter, false)) {
+                    throw new IllegalArgumentException("singleton proxy method '" + klass.name() + "." + method.name()
+                            + "' parameter '" + param.name() + "' is not statically Sendable");
+                }
+            }
+            Type result = resolve(method.returnType(), Set.of(), nominalClassType(klass));
+            if (!isActorSendableType(result, true)) {
+                throw new IllegalArgumentException("singleton proxy method '" + klass.name() + "." + method.name()
+                        + "' result is not statically Sendable");
+            }
+
+        }
+
+        String classOwnerName = classOwners.get(klass);
+        Ast.ModuleDecl classOwner = classOwnerName == null ? null : modules.get(classOwnerName);
+        if (classOwner != null && classOwner != owner) {
+            Set<String> actorBindings = new LinkedHashSet<>();
+            for (Ast.Decl decl : classOwner.declarations()) {
+                if (decl instanceof Ast.FieldDecl field) actorBindings.add(field.name());
+            }
+            if (!actorBindings.isEmpty()) {
+                for (Ast.FieldDecl classField : klass.fields()) {
+                    if (classField.initializer() != null
+                            && referencesActorModuleBinding(classField.initializer(), actorBindings, Set.of())) {
+                        throw new IllegalArgumentException("exported singleton class '" + klass.name()
+                                + "' cannot capture actor-local module state from '" + classOwner.name() + "'");
+                    }
+                }
+                for (Ast.MethodDecl method : klass.methods()) {
+                    Set<String> shadowed = new LinkedHashSet<>();
+                    shadowed.add("self");
+                    for (Ast.Param param : method.parameters()) shadowed.add(param.name());
+                    if (referencesActorModuleBinding(method.body(), actorBindings, shadowed)) {
+                        throw new IllegalArgumentException("exported singleton class '" + klass.name()
+                                + "' cannot capture actor-local module state from '" + classOwner.name() + "'");
+                    }
+                }
+            }
+        }
+        validateProcessOwnedClassEffects(owner, klass);
+    }
+
+    private void validateProcessOwnedModuleEffects(Ast.ModuleDecl owner) {
+        for (Ast.Decl decl : owner.declarations()) {
+            if (decl instanceof Ast.FunctionDecl fn) {
+                Set<String> locals = new LinkedHashSet<>();
+                for (Ast.Param param : fn.parameters()) locals.add(param.name());
+                validateProcessOwnedStatements(owner, null, fn.body(), locals,
+                        "singleton callable '" + owner.name() + "." + fn.name() + "'");
+            } else if (decl instanceof Ast.ClassDecl klass) {
+                validateProcessOwnedClassEffects(owner, klass);
+            }
+        }
+    }
+
+    private void validateProcessOwnedClassEffects(Ast.ModuleDecl owner, Ast.ClassDecl klass) {
+        if (!processEffectCheckedClasses.add(klass)) return;
+
+        for (Ast.FieldDecl field : klass.fields()) {
+            if (field.initializer() != null) {
+                validateProcessOwnedExpr(owner, klass, field.initializer(), Set.of(),
+                        "process-owned class '" + klass.name() + "' field initializer");
+            }
+        }
+
+        for (Ast.MethodDecl method : klass.methods()) {
+            Set<String> locals = new LinkedHashSet<>();
+            if (!method.isStatic()) locals.add("self");
+            for (Ast.Param param : method.parameters()) locals.add(param.name());
+            validateProcessOwnedStatements(owner, klass, method.body(), locals,
+                    "process-owned method '" + klass.name() + "." + method.name() + "'");
+        }
+    }
+
+    private void validateProcessOwnedStatements(
+            Ast.ModuleDecl processOwner,
+            Ast.ClassDecl processClass,
+            List<Ast.Stmt> statements,
+            Set<String> inheritedLocals,
+            String where) {
+        Set<String> locals = new LinkedHashSet<>(inheritedLocals);
+        for (Ast.Stmt stmt : statements) {
+            if (stmt instanceof Ast.BindingStmt binding) {
+                validateProcessOwnedExpr(processOwner, processClass, binding.initializer(), locals, where);
+                locals.add(binding.name());
+            } else if (stmt instanceof Ast.DestructureStmt destructure) {
+                validateProcessOwnedExpr(processOwner, processClass, destructure.initializer(), locals, where);
+                for (Ast.DestructureBinding binding : destructure.bindings()) locals.add(binding.name());
+            } else if (stmt instanceof Ast.ReturnStmt ret) {
+                if (ret.value() != null) validateProcessOwnedExpr(processOwner, processClass, ret.value(), locals, where);
+            } else if (stmt instanceof Ast.ExprStmt expression) {
+                validateProcessOwnedExpr(processOwner, processClass, expression.expression(), locals, where);
+            } else if (stmt instanceof Ast.DeferStmt defer) {
+                validateProcessOwnedExpr(processOwner, processClass, defer.expression(), locals, where);
+            } else if (stmt instanceof Ast.IfStmt conditional) {
+                for (Ast.IfBranch branch : conditional.branches()) {
+                    validateProcessOwnedExpr(processOwner, processClass, branch.condition(), locals, where);
+                    validateProcessOwnedStatements(processOwner, processClass, branch.body(),
+                            new LinkedHashSet<>(locals), where);
+                }
+                validateProcessOwnedStatements(processOwner, processClass, conditional.elseBody(),
+                        new LinkedHashSet<>(locals), where);
+            } else if (stmt instanceof Ast.TryStmt attempted) {
+                validateProcessOwnedStatements(processOwner, processClass, attempted.body(),
+                        new LinkedHashSet<>(locals), where);
+                Set<String> caught = new LinkedHashSet<>(locals);
+                caught.add(attempted.errorName());
+                validateProcessOwnedStatements(processOwner, processClass, attempted.catchBody(), caught, where);
+                validateProcessOwnedStatements(processOwner, processClass, attempted.finallyBody(),
+                        new LinkedHashSet<>(locals), where);
+            } else if (stmt instanceof Ast.ForOfStmt loop) {
+                validateProcessOwnedExpr(processOwner, processClass, loop.iterable(), locals, where);
+                Set<String> loopLocals = new LinkedHashSet<>(locals);
+                loopLocals.add(loop.bindingName());
+                validateProcessOwnedStatements(processOwner, processClass, loop.body(), loopLocals, where);
+            } else if (stmt instanceof Ast.ForStmt loop) {
+                Set<String> loopLocals = new LinkedHashSet<>(locals);
+                if (loop.initializer() != null) {
+                    validateProcessOwnedStatements(processOwner, processClass,
+                            List.of(loop.initializer()), loopLocals, where);
+                    if (loop.initializer() instanceof Ast.BindingStmt binding) loopLocals.add(binding.name());
+                }
+                if (loop.condition() != null) {
+                    validateProcessOwnedExpr(processOwner, processClass, loop.condition(), loopLocals, where);
+                }
+                if (loop.update() != null) {
+                    validateProcessOwnedExpr(processOwner, processClass, loop.update(), loopLocals, where);
+                }
+                validateProcessOwnedStatements(processOwner, processClass, loop.body(), loopLocals, where);
+            }
+        }
+    }
+
+    private void validateProcessOwnedExpr(
+            Ast.ModuleDecl processOwner,
+            Ast.ClassDecl processClass,
+            Ast.Expr expr,
+            Set<String> locals,
+            String where) {
+        if (expr instanceof Ast.LiteralExpr) return;
+
+        if (expr instanceof Ast.NameExpr name) {
+            if (locals.contains(name.name()) || name.name().equals("self")
+                    || name.name().equals("Some") || name.name().equals("None")) return;
+            if (name.name().equals("stdio") || name.name().equals("process") || name.name().equals("print")) {
+                throw processEffectError(where, "ambient capability '" + name.name() + "'");
+            }
+            if (importedNames.contains(name.name())) {
+                throw processEffectError(where, "imported dependency '" + name.name() + "'");
+            }
+            Ast.ModuleDecl referencedModule = modules.get(name.name());
+            if (referencedModule != null && !referencedModule.singleton()) {
+                throw processEffectError(where, "caller/context-local module '" + referencedModule.name() + "'");
+            }
+
+            Ast.FunctionDecl referencedFunction = findFunction(name.name());
+            if (referencedFunction != null) {
+                String ownerName = functionOwners.get(referencedFunction);
+                Ast.ModuleDecl functionOwner = ownerName == null ? null : modules.get(ownerName);
+                if (functionOwner == null || !functionOwner.singleton()
+                        || !functionOwner.name().equals(processOwner.name())) {
+                    throw processEffectError(where,
+                            "ordinary/foreign function value '" + name.name() + "'");
+                }
+            }
+
+            Ast.ClassDecl referencedClass = findClass(name.name());
+            if (referencedClass != null && referencedClass != processClass) {
+                String ownerName = classOwners.get(referencedClass);
+                Ast.ModuleDecl classOwner = ownerName == null ? null : modules.get(ownerName);
+                if (classOwner == null || !classOwner.singleton()
+                        || !classOwner.name().equals(processOwner.name())) {
+                    throw processEffectError(where,
+                            "ordinary/foreign class namespace '" + name.name() + "'");
+                }
+            }
+            return;
+        }
+
+        if (expr instanceof Ast.CallExpr call) {
+            if (call.callee() instanceof Ast.NameExpr name && !locals.contains(name.name())) {
+                Ast.FunctionDecl target = findFunction(name.name());
+                if (target != null) {
+                    String targetOwnerName = functionOwners.get(target);
+                    Ast.ModuleDecl targetOwner = targetOwnerName == null ? null : modules.get(targetOwnerName);
+                    if (targetOwner == null || !targetOwner.singleton()) {
+                        throw processEffectError(where, "ordinary helper function '" + name.name() + "'");
+                    }
+                }
+            }
+            if (call.callee() instanceof Ast.MemberExpr member
+                    && member.receiver() instanceof Ast.NameExpr receiver
+                    && !locals.contains(receiver.name())) {
+                Ast.ModuleDecl targetModule = modules.get(receiver.name());
+                if (targetModule != null && !targetModule.singleton()) {
+                    throw processEffectError(where, "caller/context-local module '" + targetModule.name() + "'");
+                }
+                Ast.ClassDecl targetClass = findClass(receiver.name());
+                if (targetClass != null && targetClass != processClass) {
+                    String ownerName = classOwners.get(targetClass);
+                    Ast.ModuleDecl classOwner = ownerName == null ? null : modules.get(ownerName);
+                    if (classOwner == null || !classOwner.singleton()
+                            || !classOwner.name().equals(processOwner.name())) {
+                        throw processEffectError(where, "ordinary static class '" + targetClass.name() + "'");
+                    }
+                }
+            }
+            validateProcessOwnedExpr(processOwner, processClass, call.callee(), locals, where);
+            for (Ast.Expr arg : call.arguments()) {
+                validateProcessOwnedExpr(processOwner, processClass, arg, locals, where);
+            }
+            return;
+        }
+
+        if (expr instanceof Ast.NewExpr created) {
+            Ast.ClassDecl target = findClass(created.type().name());
+            if (target == null) {
+                throw processEffectError(where, "unresolved or imported class construction '" + created.type().name() + "'");
+            }
+            if (target != processClass) {
+                String ownerName = classOwners.get(target);
+                Ast.ModuleDecl classOwner = ownerName == null ? null : modules.get(ownerName);
+                if (classOwner == null || !classOwner.singleton()
+                        || !classOwner.name().equals(processOwner.name())) {
+                    throw processEffectError(where, "ordinary class construction '" + target.name() + "'");
+                }
+            }
+            for (Ast.Expr arg : created.arguments()) {
+                validateProcessOwnedExpr(processOwner, processClass, arg, locals, where);
+            }
+            return;
+        }
+
+        if (expr instanceof Ast.AssignExpr assignment) {
+            validateProcessOwnedExpr(processOwner, processClass, assignment.target(), locals, where);
+            validateProcessOwnedExpr(processOwner, processClass, assignment.value(), locals, where);
+        } else if (expr instanceof Ast.BinaryExpr binary) {
+            validateProcessOwnedExpr(processOwner, processClass, binary.left(), locals, where);
+            validateProcessOwnedExpr(processOwner, processClass, binary.right(), locals, where);
+        } else if (expr instanceof Ast.UnaryExpr unary) {
+            validateProcessOwnedExpr(processOwner, processClass, unary.operand(), locals, where);
+        } else if (expr instanceof Ast.ConditionalExpr conditional) {
+            validateProcessOwnedExpr(processOwner, processClass, conditional.condition(), locals, where);
+            validateProcessOwnedExpr(processOwner, processClass, conditional.whenTrue(), locals, where);
+            validateProcessOwnedExpr(processOwner, processClass, conditional.whenFalse(), locals, where);
+        } else if (expr instanceof Ast.MemberExpr member) {
+            validateProcessOwnedExpr(processOwner, processClass, member.receiver(), locals, where);
+        } else if (expr instanceof Ast.IndexExpr indexed) {
+            validateProcessOwnedExpr(processOwner, processClass, indexed.receiver(), locals, where);
+            validateProcessOwnedExpr(processOwner, processClass, indexed.index(), locals, where);
+        } else if (expr instanceof Ast.AwaitExpr awaited) {
+            validateProcessOwnedExpr(processOwner, processClass, awaited.expression(), locals, where);
+        } else if (expr instanceof Ast.ListExpr list) {
+            for (Ast.Expr item : list.elements()) {
+                validateProcessOwnedExpr(processOwner, processClass, item, locals, where);
+            }
+        } else if (expr instanceof Ast.TupleExpr tuple) {
+            for (Ast.Expr item : tuple.elements()) {
+                validateProcessOwnedExpr(processOwner, processClass, item, locals, where);
+            }
+        } else if (expr instanceof Ast.ObjectExpr object) {
+            for (Ast.ObjectField field : object.fields()) {
+                validateProcessOwnedExpr(processOwner, processClass, field.value(), locals, where);
+            }
+        } else if (expr instanceof Ast.LambdaExpr lambda) {
+            Set<String> lambdaLocals = new LinkedHashSet<>(locals);
+            for (Ast.Param param : lambda.parameters()) lambdaLocals.add(param.name());
+            if (lambda.expressionBody() != null) {
+                validateProcessOwnedExpr(processOwner, processClass, lambda.expressionBody(), lambdaLocals, where);
+            }
+            if (lambda.blockBody() != null) {
+                validateProcessOwnedStatements(processOwner, processClass, lambda.blockBody(), lambdaLocals, where);
+            }
+        }
+    }
+
+    private IllegalArgumentException processEffectError(String where, String dependency) {
+        return new IllegalArgumentException(where
+                + " cannot depend on " + dependency
+                + "; process-singleton code may use only its own state/helpers and explicit singleton-service calls"
+                + " until Oreslang has a process-safe effect declaration");
+    }
+
+    private boolean referencesActorModuleBinding(
+            List<Ast.Stmt> statements,
+            Set<String> actorBindings,
+            Set<String> inheritedShadowed) {
+        Set<String> shadowed = new LinkedHashSet<>(inheritedShadowed);
+        for (Ast.Stmt stmt : statements) {
+            if (stmt instanceof Ast.BindingStmt binding) {
+                if (referencesActorModuleBinding(binding.initializer(), actorBindings, shadowed)) return true;
+                shadowed.add(binding.name());
+            } else if (stmt instanceof Ast.DestructureStmt destructure) {
+                if (referencesActorModuleBinding(destructure.initializer(), actorBindings, shadowed)) return true;
+                for (Ast.DestructureBinding binding : destructure.bindings()) shadowed.add(binding.name());
+            } else if (stmt instanceof Ast.ReturnStmt ret) {
+                if (ret.value() != null && referencesActorModuleBinding(ret.value(), actorBindings, shadowed)) return true;
+            } else if (stmt instanceof Ast.ExprStmt expression) {
+                if (referencesActorModuleBinding(expression.expression(), actorBindings, shadowed)) return true;
+            } else if (stmt instanceof Ast.DeferStmt defer) {
+                if (referencesActorModuleBinding(defer.expression(), actorBindings, shadowed)) return true;
+            } else if (stmt instanceof Ast.IfStmt conditional) {
+                for (Ast.IfBranch branch : conditional.branches()) {
+                    if (referencesActorModuleBinding(branch.condition(), actorBindings, shadowed)
+                            || referencesActorModuleBinding(branch.body(), actorBindings, shadowed)) return true;
+                }
+                if (referencesActorModuleBinding(conditional.elseBody(), actorBindings, shadowed)) return true;
+            } else if (stmt instanceof Ast.TryStmt attempted) {
+                if (referencesActorModuleBinding(attempted.body(), actorBindings, shadowed)) return true;
+                Set<String> caught = new LinkedHashSet<>(shadowed);
+                caught.add(attempted.errorName());
+                if (referencesActorModuleBinding(attempted.catchBody(), actorBindings, caught)
+                        || referencesActorModuleBinding(attempted.finallyBody(), actorBindings, shadowed)) return true;
+            } else if (stmt instanceof Ast.ForOfStmt loop) {
+                if (referencesActorModuleBinding(loop.iterable(), actorBindings, shadowed)) return true;
+                Set<String> loopShadowed = new LinkedHashSet<>(shadowed);
+                loopShadowed.add(loop.bindingName());
+                if (referencesActorModuleBinding(loop.body(), actorBindings, loopShadowed)) return true;
+            } else if (stmt instanceof Ast.ForStmt loop) {
+                Set<String> loopShadowed = new LinkedHashSet<>(shadowed);
+                if (loop.initializer() != null
+                        && referencesActorModuleBinding(List.of(loop.initializer()), actorBindings, loopShadowed)) return true;
+                if (loop.condition() != null
+                        && referencesActorModuleBinding(loop.condition(), actorBindings, loopShadowed)) return true;
+                if (loop.update() != null
+                        && referencesActorModuleBinding(loop.update(), actorBindings, loopShadowed)) return true;
+                if (referencesActorModuleBinding(loop.body(), actorBindings, loopShadowed)) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean referencesActorModuleBinding(
+            Ast.Expr expr,
+            Set<String> actorBindings,
+            Set<String> shadowed) {
+        if (expr instanceof Ast.NameExpr name) {
+            return actorBindings.contains(name.name()) && !shadowed.contains(name.name());
+        }
+        if (expr instanceof Ast.AssignExpr assignment) {
+            return referencesActorModuleBinding(assignment.target(), actorBindings, shadowed)
+                    || referencesActorModuleBinding(assignment.value(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.BinaryExpr binary) {
+            return referencesActorModuleBinding(binary.left(), actorBindings, shadowed)
+                    || referencesActorModuleBinding(binary.right(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.UnaryExpr unary) {
+            return referencesActorModuleBinding(unary.operand(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.ConditionalExpr conditional) {
+            return referencesActorModuleBinding(conditional.condition(), actorBindings, shadowed)
+                    || referencesActorModuleBinding(conditional.whenTrue(), actorBindings, shadowed)
+                    || referencesActorModuleBinding(conditional.whenFalse(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.CallExpr call) {
+            if (referencesActorModuleBinding(call.callee(), actorBindings, shadowed)) return true;
+            for (Ast.Expr arg : call.arguments()) {
+                if (referencesActorModuleBinding(arg, actorBindings, shadowed)) return true;
+            }
+            return false;
+        }
+        if (expr instanceof Ast.MemberExpr member) {
+            return referencesActorModuleBinding(member.receiver(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.IndexExpr indexed) {
+            return referencesActorModuleBinding(indexed.receiver(), actorBindings, shadowed)
+                    || referencesActorModuleBinding(indexed.index(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.NewExpr created) {
+            for (Ast.Expr arg : created.arguments()) {
+                if (referencesActorModuleBinding(arg, actorBindings, shadowed)) return true;
+            }
+            return false;
+        }
+        if (expr instanceof Ast.AwaitExpr awaited) {
+            return referencesActorModuleBinding(awaited.expression(), actorBindings, shadowed);
+        }
+        if (expr instanceof Ast.ListExpr list) {
+            for (Ast.Expr item : list.elements()) {
+                if (referencesActorModuleBinding(item, actorBindings, shadowed)) return true;
+            }
+            return false;
+        }
+        if (expr instanceof Ast.TupleExpr tuple) {
+            for (Ast.Expr item : tuple.elements()) {
+                if (referencesActorModuleBinding(item, actorBindings, shadowed)) return true;
+            }
+            return false;
+        }
+        if (expr instanceof Ast.ObjectExpr object) {
+            for (Ast.ObjectField field : object.fields()) {
+                if (referencesActorModuleBinding(field.value(), actorBindings, shadowed)) return true;
+            }
+            return false;
+        }
+        if (expr instanceof Ast.LambdaExpr lambda) {
+            Set<String> lambdaShadowed = new LinkedHashSet<>(shadowed);
+            for (Ast.Param param : lambda.parameters()) lambdaShadowed.add(param.name());
+            if (lambda.expressionBody() != null
+                    && referencesActorModuleBinding(lambda.expressionBody(), actorBindings, lambdaShadowed)) return true;
+            return lambda.blockBody() != null
+                    && referencesActorModuleBinding(lambda.blockBody(), actorBindings, lambdaShadowed);
+        }
+        return false;
+    }
+
+    private boolean containsTypeAlias(Ast.TypeRef type) {
+        if (type == null) return false;
+        if (findTypeAlias(type.name()) != null) return true;
+        for (Ast.TypeRef argument : type.arguments()) {
+            if (containsTypeAlias(argument)) return true;
+        }
+        return false;
+    }
+
+    private boolean isProcessStableStateType(Type type) {
+        if (type instanceof StringLiteral) return true;
+        if (type instanceof Primitive primitive) return primitive != Primitive.VOID;
+        if (type instanceof ListType list) return isProcessStableStateType(list.element());
+        if (type instanceof Tuple tuple) return tuple.elements().stream().allMatch(this::isProcessStableStateType);
+        if (type instanceof Named named && named.name().equals("Option") && named.arguments().size() == 1) {
+            return isProcessStableStateType(named.arguments().getFirst());
+        }
+        return false;
+    }
+
+    private boolean isActorSendableType(Type type, boolean allowVoid) {
+        if (type instanceof StringLiteral) return true;
+        if (type instanceof Primitive primitive) {
+            return primitive != Primitive.VOID || allowVoid;
+        }
+        if (type instanceof ListType list) return isActorSendableType(list.element(), false);
+        if (type instanceof Tuple tuple) return tuple.elements().stream().allMatch(item -> isActorSendableType(item, false));
+        if (type instanceof Record record) return record.members().values().stream()
+                .allMatch(item -> isActorSendableType(item, false));
+        if (type instanceof Named named && named.name().equals("Option") && named.arguments().size() == 1) {
+            return isActorSendableType(named.arguments().getFirst(), false);
+        }
+        return false;
+    }
+
+    private boolean isPureSingletonInitializer(Ast.Expr expr, Set<String> initializedFields) {
+        if (expr instanceof Ast.LiteralExpr) return true;
+        if (expr instanceof Ast.NameExpr name) {
+            return name.name().equals("None") || initializedFields.contains(name.name());
+        }
+        if (expr instanceof Ast.UnaryExpr unary) {
+            return !unary.operator().equals("&")
+                    && !unary.operator().equals("&mut")
+                    && isPureSingletonInitializer(unary.operand(), initializedFields);
+        }
+        if (expr instanceof Ast.BinaryExpr binary) {
+            return isPureSingletonInitializer(binary.left(), initializedFields)
+                    && isPureSingletonInitializer(binary.right(), initializedFields);
+        }
+        if (expr instanceof Ast.ConditionalExpr conditional) {
+            return isPureSingletonInitializer(conditional.condition(), initializedFields)
+                    && isPureSingletonInitializer(conditional.whenTrue(), initializedFields)
+                    && isPureSingletonInitializer(conditional.whenFalse(), initializedFields);
+        }
+        if (expr instanceof Ast.ListExpr list) {
+            return list.elements().stream().allMatch(item -> isPureSingletonInitializer(item, initializedFields));
+        }
+        if (expr instanceof Ast.TupleExpr tuple) {
+            return tuple.elements().stream().allMatch(item -> isPureSingletonInitializer(item, initializedFields));
+        }
+        if (expr instanceof Ast.IndexExpr indexed) {
+            return isPureSingletonInitializer(indexed.receiver(), initializedFields)
+                    && isPureSingletonInitializer(indexed.index(), initializedFields);
+        }
+        if (expr instanceof Ast.CallExpr call
+                && call.callee() instanceof Ast.NameExpr name
+                && name.name().equals("Some")
+                && call.arguments().size() == 1) {
+            return isPureSingletonInitializer(call.arguments().getFirst(), initializedFields);
+        }
+        return false;
+    }
+
+    private Function singletonTransportType(Ast.FunctionDecl fn) {
+        Set<String> generics = Set.copyOf(fn.genericParameters());
+        Function logical = (Function) functionType(fn.parameters(), fn.returnType(), generics, null);
+        return new Function(logical.parameters(), new Named("Future", List.of(logical.result())));
     }
 
     private void checkClass(String module, Ast.ClassDecl klass) {
@@ -331,10 +954,16 @@ public final class TypeChecker {
             }
         }
 
+        Ast.ModuleDecl lexicalOwner = modules.get(module);
+        Env classModuleEnv = lexicalOwner == null
+                ? new Env(null, module)
+                : lexicalOwner.singleton() ? singletonModuleEnv(lexicalOwner) : moduleBindingEnv(lexicalOwner);
+
         for (Ast.FieldDecl field : klass.fields()) {
             Type fieldType = resolve(field.type(), classGenerics, self);
             if (field.initializer() != null) {
-                Type actual = typeOfWithExpected(field.initializer(), fieldType, new Env(null), classGenerics, self);
+                validateSingletonTransportExpr(field.initializer(), module);
+                Type actual = typeOf(field.initializer(), new Env(classModuleEnv), classGenerics, self);
                 requireAssignable(actual, fieldType, "field initializer " + klass.name() + "." + field.name());
             }
             if (field.bindingKind() == Ast.BindingKind.CONST && field.initializer() != null && !constant(field.initializer())) {
@@ -358,10 +987,11 @@ public final class TypeChecker {
             }
 
             Type callableSelf = method.isStatic() ? null : self;
-            Env env = new Env(null);
+            Env env = new Env(classModuleEnv);
             if (!method.isStatic()) env.define("self", self, Ast.BindingKind.VAL);
             for (Ast.Param param : method.parameters()) env.define(param.name(), resolveParam(param, generics, callableSelf), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             Type returns = resolve(method.returnType(), generics, callableSelf);
+            validateSingletonTransportStatements(method.body(), module);
             checkBlock(method.body(), env, generics, returns, callableSelf);
             if (!method.isAbstract() && returns != Primitive.VOID && !definitelyReturns(method.body())) {
                 String label = method.isStatic() ? "static function" : "method";
@@ -382,13 +1012,11 @@ public final class TypeChecker {
         }
     }
 
-    private void checkModuleBinding(Ast.FieldDecl field) {
+    private void checkModuleBinding(Ast.ModuleDecl module, Ast.FieldDecl field) {
         if (field.initializer() == null) throw new IllegalArgumentException("module binding '" + field.name() + "' requires an initializer");
-        Type declared = field.type() == null ? null : resolve(field.type(), Set.of(), null);
-        Type actual = declared == null
-                ? typeOf(field.initializer(), new Env(null), Set.of(), null)
-                : typeOfWithExpected(field.initializer(), declared, new Env(null), Set.of(), null);
-        if (declared != null) requireAssignable(actual, declared, "initializer for " + field.name());
+        validateSingletonTransportExpr(field.initializer(), module.name());
+        Type actual = typeOf(field.initializer(), new Env(null, module.name()), Set.of(), null);
+        if (field.type() != null) requireAssignable(actual, resolve(field.type(), Set.of(), null), "initializer for " + field.name());
         if (field.bindingKind() == Ast.BindingKind.CONST && !constant(field.initializer())) {
             throw new IllegalArgumentException("const '" + field.name() + "' needs a compile-time constant initializer");
         }
@@ -406,9 +1034,14 @@ public final class TypeChecker {
             if (recursiveLambda && declaredAhead instanceof Function) {
                 env.define(binding.name(), declaredAhead, binding.kind());
             }
-            Type actual = declaredAhead == null
-                    ? typeOf(binding.initializer(), env, generics, self)
-                    : typeOfWithExpected(binding.initializer(), declaredAhead, env, generics, self);
+            if (binding.initializer() instanceof Ast.LambdaExpr lambda && declaredAhead instanceof Function expectedFunction) {
+                validateLambdaAgainstExpected(lambda, expectedFunction, env, generics, self);
+            }
+            Type actual = typeOf(binding.initializer(), env, generics, self);
+            if (actual instanceof SingletonProxy proxy) {
+                throw new IllegalArgumentException("singleton object proxy '" + proxy.moduleName() + "."
+                        + proxy.fieldName() + "' cannot be rebound locally; invoke and await its methods directly");
+            }
             Type declared = declaredAhead == null ? actual : declaredAhead;
             requireAssignable(actual, declared, "initializer for " + binding.name());
             if (binding.kind() == Ast.BindingKind.CONST && !constant(binding.initializer())) {
@@ -432,26 +1065,15 @@ public final class TypeChecker {
             return;
         }
         if (stmt instanceof Ast.ReturnStmt ret) {
-            Type actual = ret.value() == null
-                    ? Primitive.VOID
-                    : typeOfWithExpected(ret.value(), expectedReturn, env, generics, self);
+            if (ret.value() instanceof Ast.LambdaExpr lambda && expectedReturn instanceof Function expectedFunction) {
+                validateLambdaAgainstExpected(lambda, expectedFunction, env, generics, self);
+            }
+            Type actual = ret.value() == null ? Primitive.VOID : typeOf(ret.value(), env, generics, self);
             requireAssignable(actual, expectedReturn, "return value");
             return;
         }
         if (stmt instanceof Ast.ExprStmt expression) { typeOf(expression.expression(), env, generics, self); return; }
-        if (stmt instanceof Ast.BreakStmt || stmt instanceof Ast.ContinueStmt) return;
-        if (stmt instanceof Ast.DeferStmt defer) {
-            checkDefer(defer, env, generics, self);
-            return;
-        }
-        if (stmt instanceof Ast.RecoverStmt recover) {
-            checkRecover(recover, env, generics, expectedReturn, self);
-            return;
-        }
-        if (stmt instanceof Ast.PanicStmt panic) {
-            typeOf(panic.value(), env, generics, self);
-            return;
-        }
+        if (stmt instanceof Ast.DeferStmt defer) { typeOf(defer.expression(), env, generics, self); return; }
         if (stmt instanceof Ast.IfStmt conditional) {
             for (Ast.IfBranch branch : conditional.branches()) {
                 requireAssignable(typeOf(branch.condition(), env, generics, self), Primitive.BOOL, "if condition");
@@ -485,34 +1107,6 @@ public final class TypeChecker {
         }
     }
 
-    private void checkDefer(Ast.DeferStmt defer, Env env, Set<String> generics, Type self) {
-        Type produced = typeOf(defer.expression(), env, generics, self);
-        if (!(produced instanceof Function fn) || !fn.parameters().isEmpty()) {
-            throw new IllegalArgumentException(
-                    "defer evaluates its operand immediately; the result must be an arity-0 function, got " + produced);
-        }
-    }
-
-    private void checkRecover(
-            Ast.RecoverStmt recover,
-            Env env,
-            Set<String> generics,
-            Type expectedReturn,
-            Type self) {
-        if (recover.handler() instanceof Ast.LambdaExpr lambda && lambda.parameters().size() != 1) {
-            throw new IllegalArgumentException(
-                    "recover evaluates its handler immediately; the result must be an arity-1 function");
-        }
-
-        Function expected = new Function(List.of(Unknown.INSTANCE), expectedReturn);
-        Type produced = typeOfWithExpected(recover.handler(), expected, env, generics, self);
-        if (!(produced instanceof Function fn) || fn.parameters().size() != 1) {
-            throw new IllegalArgumentException(
-                    "recover evaluates its handler immediately; the result must be an arity-1 function, got " + produced);
-        }
-        requireAssignable(fn.result(), expectedReturn, "recover handler result");
-    }
-
     private Type typeOf(Ast.Expr expr, Env env, Set<String> generics, Type self) {
         if (expr instanceof Ast.LiteralExpr literal) {
             Object value = literal.value();
@@ -533,10 +1127,29 @@ public final class TypeChecker {
             Ast.ModuleDecl moduleNamespace = modules.get(name.name());
             if (moduleNamespace != null) return moduleShape(moduleNamespace);
             Ast.ClassDecl classNamespace = findClass(name.name());
-            if (classNamespace != null) return new ClassNamespace(qualifiedClassName(classNamespace));
+            if (classNamespace != null) {
+                String ownerName = classOwners.get(classNamespace);
+                Ast.ModuleDecl owner = ownerName == null ? null : modules.get(ownerName);
+                if (owner != null && owner.singleton() && !owner.name().equals(env.moduleName)) {
+                    throw new IllegalArgumentException("class '" + classNamespace.name()
+                            + "' is actor-private inside singleton module '" + owner.name() + "'");
+                }
+                return new ClassNamespace(qualifiedClassName(classNamespace));
+            }
             if (importedValues.contains(name.name())) return Unknown.INSTANCE;
             Ast.FunctionDecl fn = findFunction(name.name());
-            if (fn != null) return callableValueType(fn);
+            if (fn != null) {
+                String ownerName = functionOwners.get(fn);
+                Ast.ModuleDecl owner = ownerName == null ? null : modules.get(ownerName);
+                if (owner != null && owner.singleton() && !owner.name().equals(env.moduleName)) {
+                    if (fn.visibility() != Ast.Visibility.PUBLIC) {
+                        throw new IllegalArgumentException("private singleton callable '" + owner.name() + "."
+                                + fn.name() + "' is actor-private");
+                    }
+                    return singletonTransportType(fn);
+                }
+                return functionType(fn.parameters(), fn.returnType(), Set.copyOf(fn.genericParameters()), null);
+            }
             throw new IllegalArgumentException("unknown name '" + name.name() + "'");
         }
         if (expr instanceof Ast.AssignExpr assignment) {
@@ -560,7 +1173,7 @@ public final class TypeChecker {
                 else throw new IllegalArgumentException("indexed assignment requires an array/list or tuple");
                 where = "index";
             } else throw new IllegalArgumentException("unsupported assignment target");
-            Type value = typeOfWithExpected(assignment.value(), targetType, env, generics, self);
+            Type value = typeOf(assignment.value(), env, generics, self);
             requireAssignable(value, targetType, "assignment to " + where);
             return targetType;
         }
@@ -618,10 +1231,29 @@ public final class TypeChecker {
                     fnGenerics.addAll(fn.genericParameters());
                     for (int i = 0; i < call.arguments().size(); i++) {
                         Type expected = resolveParam(fn.parameters().get(i), fnGenerics, null);
-                        Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                        requireAssignable(actual, expected, "argument " + (i + 1));
+                        validateLambdaArgument(call.arguments().get(i), expected, env, generics, self);
+                        requireAssignable(typeOf(call.arguments().get(i), env, generics, self), expected, "argument " + (i + 1));
                     }
                     return resolve(fn.returnType(), fnGenerics, null);
+                }
+                if (receiver instanceof SingletonProxy proxy) {
+                    Ast.ClassDecl klass = findClass(proxy.target().name());
+                    if (klass == null) throw new IllegalArgumentException("unknown singleton proxy class '" + proxy.target().name() + "'");
+                    Ast.MethodDecl method = findMethod(klass, member.member(), call.arguments().size(), new LinkedHashSet<>());
+                    if (method == null || method.visibility() != Ast.Visibility.PUBLIC) {
+                        throw new IllegalArgumentException("no public singleton proxy method '" + member.member()
+                                + "' with arity " + call.arguments().size() + " on " + proxy.target().name());
+                    }
+                    Set<String> methodGenerics = new HashSet<>(klass.genericParameters());
+                    methodGenerics.addAll(method.genericParameters());
+                    for (int i = 0; i < call.arguments().size(); i++) {
+                        Type expected = resolveParam(method.parameters().get(i), methodGenerics, proxy.target());
+                        validateLambdaArgument(call.arguments().get(i), expected, env, generics, self);
+                        requireAssignable(typeOf(call.arguments().get(i), env, generics, self), expected,
+                                "singleton proxy argument " + (i + 1));
+                    }
+                    Type result = resolve(method.returnType(), methodGenerics, proxy.target());
+                    return new Named("Future", List.of(result));
                 }
                 if (receiver instanceof Named named) {
                     Ast.ClassDecl klass = findClass(named.name());
@@ -632,8 +1264,8 @@ public final class TypeChecker {
                         methodGenerics.addAll(method.genericParameters());
                         for (int i = 0; i < call.arguments().size(); i++) {
                             Type expected = resolveParam(method.parameters().get(i), methodGenerics, named);
-                            Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                            requireAssignable(actual, expected, "argument " + (i + 1));
+                            validateLambdaArgument(call.arguments().get(i), expected, env, generics, self);
+                            requireAssignable(typeOf(call.arguments().get(i), env, generics, self), expected, "argument " + (i + 1));
                         }
                         return resolve(method.returnType(), methodGenerics, named);
                     }
@@ -643,16 +1275,45 @@ public final class TypeChecker {
             if (!(callee instanceof Function fn)) return Unknown.INSTANCE;
             if (fn.parameters().size() != call.arguments().size()) throw new IllegalArgumentException("call arity mismatch");
             for (int i = 0; i < fn.parameters().size(); i++) {
-                Type expected = fn.parameters().get(i);
-                Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                requireAssignable(actual, expected, "argument " + (i + 1));
+                validateLambdaArgument(call.arguments().get(i), fn.parameters().get(i), env, generics, self);
+                requireAssignable(typeOf(call.arguments().get(i), env, generics, self), fn.parameters().get(i), "argument " + (i + 1));
             }
             return fn.result();
         }
         if (expr instanceof Ast.MemberExpr member) {
             if (member.receiver() instanceof Ast.NameExpr namespace && modules.containsKey(namespace.name())) {
+                Ast.ModuleDecl module = modules.get(namespace.name());
                 Ast.ClassDecl memberClass = classes.get(namespace.name() + "." + member.member());
-                if (memberClass != null) return new ClassNamespace(qualifiedClassName(memberClass));
+                if (memberClass != null) {
+                    if (module.singleton() && !module.name().equals(env.moduleName)) {
+                        throw new IllegalArgumentException("classes inside singleton module '" + module.name()
+                                + "' are actor-private and cannot be accessed through its external proxy");
+                    }
+                    return new ClassNamespace(qualifiedClassName(memberClass));
+                }
+                if (module.singleton()) {
+                    for (Ast.Decl decl : module.declarations()) {
+                        if (decl instanceof Ast.FunctionDecl fn
+                                && fn.visibility() == Ast.Visibility.PUBLIC
+                                && fn.name().equals(member.member())) {
+                            return module.name().equals(env.moduleName)
+                                    ? functionType(fn.parameters(), fn.returnType(), Set.copyOf(fn.genericParameters()), null)
+                                    : singletonTransportType(fn);
+                        }
+                        if (decl instanceof Ast.FieldDecl field
+                                && field.visibility() == Ast.Visibility.PUBLIC
+                                && field.name().equals(member.member())) {
+                            Type declared = resolve(field.type(), Set.of(), null);
+                            if (!(declared instanceof Named named) || findClass(named.name()) == null) {
+                                throw new IllegalArgumentException("singleton module field '" + module.name() + "."
+                                        + field.name() + "' is not an exported class-instance proxy");
+                            }
+                            return module.name().equals(env.moduleName)
+                                    ? named
+                                    : new SingletonProxy(module.name(), field.name(), named);
+                        }
+                    }
+                }
             }
             if (member.receiver() instanceof Ast.NameExpr name && name.name().equals("stdio")) {
                 if (member.member().equals("print") || member.member().equals("println")) return new Function(List.of(Unknown.INSTANCE), Primitive.VOID);
@@ -664,6 +1325,20 @@ public final class TypeChecker {
             }
             if (member.receiver() instanceof Ast.NameExpr name && name.name().equals("process")) return Unknown.INSTANCE;
             if (member.receiver() instanceof Ast.NameExpr name && importedValues.contains(name.name())) return Unknown.INSTANCE;
+
+            if (receiver instanceof SingletonProxy proxy) {
+                Ast.ClassDecl klass = findClass(proxy.target().name());
+                if (klass == null) throw new IllegalArgumentException("unknown singleton proxy class '" + proxy.target().name() + "'");
+                if (findFieldType(klass, member.member(), new LinkedHashSet<>()) != null) {
+                    throw new IllegalArgumentException("singleton object fields are actor-private; invoke a public method on "
+                            + proxy.moduleName() + "." + proxy.fieldName());
+                }
+                if (!findMethodsByName(klass, member.member(), new LinkedHashSet<>()).isEmpty()) {
+                    throw new IllegalArgumentException("singleton proxy method values cannot be extracted; call and await "
+                            + proxy.moduleName() + "." + proxy.fieldName() + "." + member.member() + "(...) directly");
+                }
+                throw new IllegalArgumentException("unknown singleton proxy member '" + member.member() + "'");
+            }
 
             if (receiver instanceof ClassNamespace classNamespace) {
                 Ast.ClassDecl klass = findClass(classNamespace.className());
@@ -683,24 +1358,6 @@ public final class TypeChecker {
                 return result;
             }
             if (receiver instanceof Named named) {
-                if (named.name().equals("Actor") && named.arguments().size() == 1) {
-                    Type messageType = named.arguments().getFirst();
-                    return switch (member.member()) {
-                        case "send" -> new Function(List.of(messageType), Primitive.VOID);
-                        case "stop", "join" -> new Function(List.of(), Primitive.VOID);
-                        case "alive", "failed" -> Primitive.BOOL;
-                        case "kind" -> Primitive.STRING;
-                        default -> throw new IllegalArgumentException("unknown Actor member '" + member.member() + "'");
-                    };
-                }
-                if (named.name().equals("ActorTask") && named.arguments().isEmpty()) {
-                    return switch (member.member()) {
-                        case "stop", "join" -> new Function(List.of(), Primitive.VOID);
-                        case "alive", "failed" -> Primitive.BOOL;
-                        case "kind" -> Primitive.STRING;
-                        default -> throw new IllegalArgumentException("unknown ActorTask member '" + member.member() + "'");
-                    };
-                }
                 Ast.ClassDecl klass = findClass(named.name());
                 if (klass != null) {
                     Type field = findFieldType(klass, member.member(), new LinkedHashSet<>());
@@ -726,6 +1383,12 @@ public final class TypeChecker {
         if (expr instanceof Ast.NewExpr created) {
             Ast.ClassDecl klass = findClass(created.type().name());
             if (klass == null) return new Named(created.type().name(), created.type().arguments().stream().map(a -> resolve(a, generics, self)).toList());
+            String ownerName = classOwners.get(klass);
+            Ast.ModuleDecl owner = ownerName == null ? null : modules.get(ownerName);
+            if (owner != null && owner.singleton() && !owner.name().equals(env.moduleName)) {
+                throw new IllegalArgumentException("class '" + klass.name()
+                        + "' is actor-private inside singleton module '" + owner.name() + "'");
+            }
             List<Ast.FieldDecl> fields = effectiveFields(klass, new LinkedHashSet<>());
             if (created.arguments().size() > fields.size()) throw new IllegalArgumentException("constructor for " + klass.name() + " received too many positional fields");
             Type nominal = nominalClassType(klass);
@@ -763,20 +1426,6 @@ public final class TypeChecker {
             }
             return new Record(members);
         }
-        if (expr instanceof Ast.ActorExpr actor) {
-            Ast.LambdaExpr behavior = actor.behavior();
-            if (behavior.parameters().size() != 1) {
-                throw new IllegalArgumentException("actor behavior must accept exactly one mailbox message parameter");
-            }
-            Ast.Param messageParam = behavior.parameters().getFirst();
-            Type messageType = resolveParam(messageParam, generics, self);
-            Named actorType = new Named("Actor", List.of(messageType));
-            Function expectedBehavior = new Function(List.of(messageType), Primitive.VOID);
-            Env actorEnv = new Env(env);
-            actorEnv.define("self", actorType, Ast.BindingKind.VAL);
-            validateLambdaAgainstExpected(behavior, expectedBehavior, actorEnv, generics, self);
-            return actorType;
-        }
         if (expr instanceof Ast.LambdaExpr lambda) {
             Env lambdaEnv = new Env(env);
             List<Type> parameters = new ArrayList<>();
@@ -788,130 +1437,16 @@ public final class TypeChecker {
             if (lambda.expressionBody() != null) {
                 throw new IllegalArgumentException("expression-body lambdas are not supported; lambdas require braces and explicit return");
             }
-            LambdaReturnSummary returns = checkLambdaBlockAndInferReturns(lambda.blockBody(), lambdaEnv, generics, self);
-            Type result = returns.hasReturn() ? returns.type() : Primitive.VOID;
-            if (result != Primitive.VOID && !definitelyReturns(lambda.blockBody())) {
-                throw new IllegalArgumentException("inferred non-void lambda must explicitly return on every path");
-            }
-            return new Function(parameters, result);
+            checkBlock(lambda.blockBody(), lambdaEnv, generics, Unknown.INSTANCE, self);
+            return new Function(parameters, Unknown.INSTANCE);
         }
         return Unknown.INSTANCE;
     }
 
-    private record LambdaReturnSummary(boolean hasReturn, Type type) {
-        private static LambdaReturnSummary none() { return new LambdaReturnSummary(false, Primitive.VOID); }
-        private static LambdaReturnSummary of(Type type) { return new LambdaReturnSummary(true, type); }
-    }
-
-    private LambdaReturnSummary checkLambdaBlockAndInferReturns(
-            List<Ast.Stmt> body,
-            Env parent,
-            Set<String> generics,
-            Type self) {
-        Env env = new Env(parent);
-        LambdaReturnSummary inferred = LambdaReturnSummary.none();
-
-        for (Ast.Stmt stmt : body) {
-            inferred = mergeLambdaReturns(inferred, inferredReturnFromStatement(stmt, env, generics, self));
-            checkStatement(stmt, env, generics, Unknown.INSTANCE, self);
-        }
-        return inferred;
-    }
-
-    private LambdaReturnSummary inferredReturnFromStatement(
-            Ast.Stmt stmt,
-            Env env,
-            Set<String> generics,
-            Type self) {
-        if (stmt instanceof Ast.ReturnStmt ret) {
-            return LambdaReturnSummary.of(ret.value() == null
-                    ? Primitive.VOID
-                    : typeOf(ret.value(), env, generics, self));
-        }
-        if (stmt instanceof Ast.RecoverStmt recover) {
-            Type handler = typeOf(recover.handler(), env, generics, self);
-            if (handler instanceof Function fn && fn.parameters().size() == 1) {
-                return LambdaReturnSummary.of(fn.result());
-            }
-            return LambdaReturnSummary.none();
-        }
-        if (stmt instanceof Ast.IfStmt conditional) {
-            LambdaReturnSummary result = LambdaReturnSummary.none();
-            for (Ast.IfBranch branch : conditional.branches()) {
-                result = mergeLambdaReturns(
-                        result,
-                        checkLambdaBlockAndInferReturns(branch.body(), env, generics, self));
-            }
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(conditional.elseBody(), env, generics, self));
-            return result;
-        }
-        if (stmt instanceof Ast.TryStmt attempted) {
-            LambdaReturnSummary result = checkLambdaBlockAndInferReturns(
-                    attempted.body(), env, generics, self);
-
-            Env caught = new Env(env);
-            caught.define(attempted.errorName(), Unknown.INSTANCE, Ast.BindingKind.VAL);
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(attempted.catchBody(), caught, generics, self));
-
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(attempted.finallyBody(), env, generics, self));
-            return result;
-        }
-        if (stmt instanceof Ast.ForOfStmt loop) {
-            Env loopEnv = new Env(env);
-            loopEnv.define(
-                    loop.bindingName(),
-                    iterableElementType(typeOf(loop.iterable(), env, generics, self)),
-                    loop.bindingKind());
-            return checkLambdaBlockAndInferReturns(loop.body(), loopEnv, generics, self);
-        }
-        if (stmt instanceof Ast.ForStmt loop) {
-            Env loopEnv = new Env(env);
-            if (loop.initializer() != null) {
-                checkStatement(loop.initializer(), loopEnv, generics, Unknown.INSTANCE, self);
-            }
-            return checkLambdaBlockAndInferReturns(loop.body(), loopEnv, generics, self);
-        }
-        return LambdaReturnSummary.none();
-    }
-
-    private LambdaReturnSummary mergeLambdaReturns(
-            LambdaReturnSummary left,
-            LambdaReturnSummary right) {
-        if (!left.hasReturn()) return right;
-        if (!right.hasReturn()) return left;
-        if ((left.type() == Primitive.VOID) != (right.type() == Primitive.VOID)) {
-            throw new IllegalArgumentException("lambda cannot mix 'return;' with value-returning paths");
-        }
-        return LambdaReturnSummary.of(commonType(left.type(), right.type()));
-    }
-
-    private Type typeOfWithExpected(
-            Ast.Expr expression,
-            Type expected,
-            Env env,
-            Set<String> generics,
-            Type self) {
-        if (expression instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
+    private void validateLambdaArgument(Ast.Expr argument, Type expected, Env env, Set<String> generics, Type self) {
+        if (argument instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
             validateLambdaAgainstExpected(lambda, fn, env, generics, self);
-            return fn;
         }
-
-        if (expression instanceof Ast.ConditionalExpr conditional && expected instanceof Function) {
-            requireAssignable(typeOf(conditional.condition(), env, generics, self), Primitive.BOOL, "ternary condition");
-            Type whenTrue = typeOfWithExpected(conditional.whenTrue(), expected, env, generics, self);
-            Type whenFalse = typeOfWithExpected(conditional.whenFalse(), expected, env, generics, self);
-            requireAssignable(whenTrue, expected, "ternary true branch");
-            requireAssignable(whenFalse, expected, "ternary false branch");
-            return expected;
-        }
-
-        return typeOf(expression, env, generics, self);
     }
 
     private void validateLambdaAgainstExpected(Ast.LambdaExpr lambda, Function expected, Env parent, Set<String> generics, Type self) {
@@ -936,24 +1471,181 @@ public final class TypeChecker {
         }
     }
 
-    private Type callableValueType(Ast.FunctionDecl fn) {
-        Set<String> generics = Set.copyOf(fn.genericParameters());
-        List<Type> parameters = fn.parameters().stream()
-                .map(param -> resolveParam(param, generics, null))
-                .toList();
-        Type result = isActorCallable(fn)
-                ? new Named("ActorTask", List.of())
-                : resolve(fn.returnType(), generics, null);
-        return new Function(parameters, result);
+    private void validateSingletonTransportStatements(List<Ast.Stmt> statements, String currentModule) {
+        for (Ast.Stmt stmt : statements) {
+            if (stmt instanceof Ast.BindingStmt binding) validateSingletonTransportExpr(binding.initializer(), currentModule);
+            else if (stmt instanceof Ast.DestructureStmt destructure) validateSingletonTransportExpr(destructure.initializer(), currentModule);
+            else if (stmt instanceof Ast.ReturnStmt ret && ret.value() != null) validateSingletonTransportExpr(ret.value(), currentModule);
+            else if (stmt instanceof Ast.ExprStmt expression) validateSingletonTransportExpr(expression.expression(), currentModule);
+            else if (stmt instanceof Ast.DeferStmt defer) validateSingletonTransportExpr(defer.expression(), currentModule);
+            else if (stmt instanceof Ast.IfStmt conditional) {
+                for (Ast.IfBranch branch : conditional.branches()) {
+                    validateSingletonTransportExpr(branch.condition(), currentModule);
+                    validateSingletonTransportStatements(branch.body(), currentModule);
+                }
+                validateSingletonTransportStatements(conditional.elseBody(), currentModule);
+            } else if (stmt instanceof Ast.TryStmt attempted) {
+                validateSingletonTransportStatements(attempted.body(), currentModule);
+                validateSingletonTransportStatements(attempted.catchBody(), currentModule);
+                validateSingletonTransportStatements(attempted.finallyBody(), currentModule);
+            } else if (stmt instanceof Ast.ForOfStmt loop) {
+                validateSingletonTransportExpr(loop.iterable(), currentModule);
+                validateSingletonTransportStatements(loop.body(), currentModule);
+            } else if (stmt instanceof Ast.ForStmt loop) {
+                if (loop.initializer() != null) validateSingletonTransportStatements(List.of(loop.initializer()), currentModule);
+                if (loop.condition() != null) validateSingletonTransportExpr(loop.condition(), currentModule);
+                if (loop.update() != null) validateSingletonTransportExpr(loop.update(), currentModule);
+                validateSingletonTransportStatements(loop.body(), currentModule);
+            }
+        }
     }
 
-    private boolean isActorCallable(Ast.FunctionDecl fn) {
-        return fn.annotations().stream().anyMatch(annotation ->
-                annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
+    private void validateSingletonTransportExpr(Ast.Expr expr, String currentModule) {
+        if (expr instanceof Ast.NameExpr name) {
+            Ast.ModuleDecl module = modules.get(name.name());
+            if (module != null && module.singleton() && !module.name().equals(currentModule)) {
+                throw new IllegalArgumentException("singleton module handles cannot be extracted; access and await "
+                        + module.name() + " members directly");
+            }
+
+            Ast.FunctionDecl function = findFunction(name.name());
+            if (function != null) {
+                String ownerName = functionOwners.get(function);
+                Ast.ModuleDecl owner = ownerName == null ? null : modules.get(ownerName);
+                if (owner != null && owner.singleton() && !owner.name().equals(currentModule)
+                        && function.visibility() == Ast.Visibility.PUBLIC) {
+                    throw new IllegalArgumentException("singleton service function values cannot be extracted; call and await "
+                            + owner.name() + "." + function.name() + "(...) directly");
+                }
+            }
+            return;
+        }
+
+        if (expr instanceof Ast.AwaitExpr awaited) {
+            if (awaited.expression() instanceof Ast.CallExpr call && isExternalSingletonCall(call, currentModule)) {
+                validateSingletonTransportCallChildren(call, currentModule);
+                return;
+            }
+            validateSingletonTransportExpr(awaited.expression(), currentModule);
+            return;
+        }
+        if (expr instanceof Ast.CallExpr call) {
+            if (isExternalSingletonCall(call, currentModule)) {
+                throw new IllegalArgumentException("cross-singleton calls must be immediately awaited so they cannot outlive"
+                        + " the caller context or leave an untracked mailbox wait");
+            }
+            validateSingletonTransportCallChildren(call, currentModule);
+            return;
+        }
+        if (expr instanceof Ast.AssignExpr assignment) {
+            validateSingletonTransportExpr(assignment.target(), currentModule);
+            validateSingletonTransportExpr(assignment.value(), currentModule);
+        } else if (expr instanceof Ast.BinaryExpr binary) {
+            validateSingletonTransportExpr(binary.left(), currentModule);
+            validateSingletonTransportExpr(binary.right(), currentModule);
+        } else if (expr instanceof Ast.UnaryExpr unary) {
+            validateSingletonTransportExpr(unary.operand(), currentModule);
+        } else if (expr instanceof Ast.ConditionalExpr conditional) {
+            validateSingletonTransportExpr(conditional.condition(), currentModule);
+            validateSingletonTransportExpr(conditional.whenTrue(), currentModule);
+            validateSingletonTransportExpr(conditional.whenFalse(), currentModule);
+        } else if (expr instanceof Ast.MemberExpr member) {
+            if (isExternalSingletonFunctionMember(member, currentModule)) {
+                throw new IllegalArgumentException("singleton service function values cannot be extracted; call and await "
+                        + ((Ast.NameExpr) member.receiver()).name() + "." + member.member() + "(...) directly");
+            }
+            if (isExternalSingletonProxyFieldMember(member, currentModule)) {
+                throw new IllegalArgumentException("singleton object proxy handles cannot be extracted; call and await a method on "
+                        + ((Ast.NameExpr) member.receiver()).name() + "." + member.member() + " directly");
+            }
+            validateSingletonTransportExpr(member.receiver(), currentModule);
+        } else if (expr instanceof Ast.IndexExpr indexed) {
+            validateSingletonTransportExpr(indexed.receiver(), currentModule);
+            validateSingletonTransportExpr(indexed.index(), currentModule);
+        } else if (expr instanceof Ast.NewExpr created) {
+            for (Ast.Expr argument : created.arguments()) validateSingletonTransportExpr(argument, currentModule);
+        } else if (expr instanceof Ast.ListExpr list) {
+            for (Ast.Expr item : list.elements()) validateSingletonTransportExpr(item, currentModule);
+        } else if (expr instanceof Ast.TupleExpr tuple) {
+            for (Ast.Expr item : tuple.elements()) validateSingletonTransportExpr(item, currentModule);
+        } else if (expr instanceof Ast.ObjectExpr object) {
+            for (Ast.ObjectField field : object.fields()) validateSingletonTransportExpr(field.value(), currentModule);
+        } else if (expr instanceof Ast.LambdaExpr lambda) {
+            if (lambda.expressionBody() != null) validateSingletonTransportExpr(lambda.expressionBody(), currentModule);
+            if (lambda.blockBody() != null) validateSingletonTransportStatements(lambda.blockBody(), currentModule);
+        }
     }
 
-    private boolean isIsolateActorCallable(Ast.FunctionDecl fn) {
-        return fn.annotations().stream().anyMatch(annotation -> annotation.name().equals("__ActorIsolate"));
+    private void validateSingletonTransportCallChildren(Ast.CallExpr call, String currentModule) {
+        // A recognized external singleton call is allowed only because the
+        // surrounding validator proved it is immediately awaited. Do not
+        // reinterpret its callee member as a first-class function extraction.
+        if (!isExternalSingletonCall(call, currentModule)) {
+            validateSingletonTransportExpr(call.callee(), currentModule);
+        }
+        for (Ast.Expr argument : call.arguments()) validateSingletonTransportExpr(argument, currentModule);
+    }
+
+    private boolean isExternalSingletonProxyFieldMember(Ast.MemberExpr member, String currentModule) {
+        if (!(member.receiver() instanceof Ast.NameExpr namespace)) return false;
+        Ast.ModuleDecl owner = modules.get(namespace.name());
+        if (owner == null || !owner.singleton() || owner.name().equals(currentModule)) return false;
+        for (Ast.Decl decl : owner.declarations()) {
+            if (decl instanceof Ast.FieldDecl field
+                    && field.visibility() == Ast.Visibility.PUBLIC
+                    && field.name().equals(member.member())
+                    && singletonProxyClass(field) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isExternalSingletonFunctionMember(Ast.MemberExpr member, String currentModule) {
+        if (!(member.receiver() instanceof Ast.NameExpr namespace)) return false;
+        Ast.ModuleDecl owner = modules.get(namespace.name());
+        if (owner == null || !owner.singleton() || owner.name().equals(currentModule)) return false;
+        for (Ast.Decl decl : owner.declarations()) {
+            if (decl instanceof Ast.FunctionDecl fn
+                    && fn.visibility() == Ast.Visibility.PUBLIC
+                    && fn.name().equals(member.member())) return true;
+        }
+        return false;
+    }
+
+    private boolean isExternalSingletonCall(Ast.CallExpr call, String currentModule) {
+        if (call.callee() instanceof Ast.NameExpr name) {
+            Ast.FunctionDecl fn = findFunction(name.name());
+            if (fn == null) return false;
+            String ownerName = functionOwners.get(fn);
+            Ast.ModuleDecl owner = ownerName == null ? null : modules.get(ownerName);
+            return owner != null && owner.singleton() && !owner.name().equals(currentModule);
+        }
+        if (call.callee() instanceof Ast.MemberExpr member
+                && member.receiver() instanceof Ast.NameExpr namespace) {
+            Ast.ModuleDecl owner = modules.get(namespace.name());
+            if (owner == null || !owner.singleton() || owner.name().equals(currentModule)) return false;
+            for (Ast.Decl decl : owner.declarations()) {
+                if (decl instanceof Ast.FunctionDecl fn
+                        && fn.visibility() == Ast.Visibility.PUBLIC
+                        && fn.name().equals(member.member())) return true;
+            }
+        }
+        if (call.callee() instanceof Ast.MemberExpr method
+                && method.receiver() instanceof Ast.MemberExpr exported
+                && exported.receiver() instanceof Ast.NameExpr namespace) {
+            Ast.ModuleDecl owner = modules.get(namespace.name());
+            if (owner == null || !owner.singleton() || owner.name().equals(currentModule)) return false;
+            for (Ast.Decl decl : owner.declarations()) {
+                if (decl instanceof Ast.FieldDecl field
+                        && field.visibility() == Ast.Visibility.PUBLIC
+                        && field.name().equals(exported.member())
+                        && singletonProxyClass(field) != null) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private Type deref(Type type) {
@@ -1201,6 +1893,16 @@ public final class TypeChecker {
         Ast.ClassDecl parent = findClass(parentRef.name());
         if (parent == null) throw new IllegalArgumentException("unknown parent class '" + parentRef.name() + "' for " + child.name());
         if (parent == child) throw new IllegalArgumentException("class '" + child.name() + "' cannot extend itself");
+
+        String parentOwnerName = classOwners.get(parent);
+        Ast.ModuleDecl parentOwner = parentOwnerName == null ? null : modules.get(parentOwnerName);
+        String childOwnerName = classOwners.get(child);
+        if (parentOwner != null && parentOwner.singleton()
+                && !java.util.Objects.equals(parentOwnerName, childOwnerName)) {
+            throw new IllegalArgumentException("class '" + parent.name()
+                    + "' is actor-private inside singleton module '" + parentOwner.name()
+                    + "' and cannot be inherited outside that module");
+        }
         return parent;
     }
 
@@ -1276,14 +1978,6 @@ public final class TypeChecker {
                 Type element = resolve(ref.arguments().getFirst(), generics, self, true);
                 if (element == Primitive.VOID) throw new IllegalArgumentException("Option<void> is invalid; use void for no return value");
                 yield new Named("Option", List.of(element));
-            }
-            case "Actor" -> {
-                if (ref.inferArguments() || ref.arguments().size() != 1) throw new IllegalArgumentException("Actor requires exactly one explicit message type argument");
-                yield new Named("Actor", List.of(resolve(ref.arguments().getFirst(), generics, self)));
-            }
-            case "ActorTask" -> {
-                if (ref.inferArguments() || !ref.arguments().isEmpty()) throw new IllegalArgumentException("ActorTask does not take type arguments");
-                yield new Named("ActorTask", List.of());
             }
             case "Fnc" -> {
                 List<Type> args = ref.arguments().stream().map(arg -> resolve(arg, generics, self)).toList();
@@ -1409,7 +2103,7 @@ public final class TypeChecker {
 
     private boolean definitelyReturns(List<Ast.Stmt> body) {
         for (Ast.Stmt stmt : body) {
-            if (stmt instanceof Ast.ReturnStmt || stmt instanceof Ast.PanicStmt) return true;
+            if (stmt instanceof Ast.ReturnStmt) return true;
             if (stmt instanceof Ast.IfStmt conditional) {
                 boolean allBranches = !conditional.branches().isEmpty()
                         && conditional.branches().stream().allMatch(branch -> definitelyReturns(branch.body()))
@@ -1470,8 +2164,6 @@ public final class TypeChecker {
         else if (stmt instanceof Ast.ReturnStmt s && s.value() != null) collectCalls(s.value(), module, out);
         else if (stmt instanceof Ast.ExprStmt s) collectCalls(s.expression(), module, out);
         else if (stmt instanceof Ast.DeferStmt s) collectCalls(s.expression(), module, out);
-        else if (stmt instanceof Ast.RecoverStmt s) collectCalls(s.handler(), module, out);
-        else if (stmt instanceof Ast.PanicStmt s) collectCalls(s.value(), module, out);
         else if (stmt instanceof Ast.IfStmt s) {
             for (Ast.IfBranch b : s.branches()) {
                 collectCalls(b.condition(), module, out);
@@ -1515,8 +2207,6 @@ public final class TypeChecker {
         else if (expr instanceof Ast.LambdaExpr e) {
             if (e.expressionBody() != null) collectCalls(e.expressionBody(), module, out);
             if (e.blockBody() != null) for (Ast.Stmt nested : e.blockBody()) collectCalls(nested, module, out);
-        } else if (expr instanceof Ast.ActorExpr e) {
-            for (Ast.Stmt nested : e.behavior().blockBody()) collectCalls(nested, module, out);
         }
     }
 
@@ -1534,8 +2224,17 @@ public final class TypeChecker {
 
     private static final class Env {
         private final Env parent;
+        private final String moduleName;
         private final Map<String, Binding> bindings = new HashMap<>();
-        private Env(Env parent) { this.parent = parent; }
+
+        private Env(Env parent) {
+            this(parent, parent == null ? null : parent.moduleName);
+        }
+
+        private Env(Env parent, String moduleName) {
+            this.parent = parent;
+            this.moduleName = moduleName;
+        }
         private void define(String name, Type type, Ast.BindingKind kind) {
             if (bindings.putIfAbsent(name, new Binding(type, kind)) != null) throw new IllegalArgumentException("duplicate binding '" + name + "'");
         }

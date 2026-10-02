@@ -66,24 +66,60 @@ public final class OwnershipChecker {
     private void validate(Ast.Program program) {
         for (Ast.ModuleDecl module : program.modules()) {
             for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl fn) checkFunction(fn);
-                else if (decl instanceof Ast.ClassDecl klass) checkClass(klass);
+                if (decl instanceof Ast.FunctionDecl fn) checkFunction(module, fn);
+                else if (decl instanceof Ast.InitDecl init) checkInit(module, init);
+                else if (decl instanceof Ast.ClassDecl klass) checkClass(module, klass);
             }
         }
     }
 
-    private void checkFunction(Ast.FunctionDecl fn) {
-        Scope scope = new Scope(null);
+    private void checkInit(Ast.ModuleDecl module, Ast.InitDecl init) {
+        Scope moduleScope = new Scope(null);
+        seedModuleState(module, moduleScope);
+        Scope scope = new Scope(moduleScope);
+        checkBlock(init.body(), scope, Ast.TypeRef.simple("void"));
+        scope.close();
+        moduleScope.close();
+    }
+
+    private void checkFunction(Ast.ModuleDecl module, Ast.FunctionDecl fn) {
+        Scope moduleScope = new Scope(null);
+        seedModuleState(module, moduleScope);
+        Scope scope = new Scope(moduleScope);
         for (Ast.Param param : fn.parameters()) {
             scope.define(param.name(), stateForParam(param));
         }
         checkBlock(fn.body(), scope, fn.returnType());
         scope.close();
+        moduleScope.close();
     }
 
-    private void checkClass(Ast.ClassDecl klass) {
+    private void seedModuleState(Ast.ModuleDecl module, Scope scope) {
+        for (Ast.Decl decl : module.declarations()) {
+            if (!(decl instanceof Ast.FieldDecl field)) continue;
+            Ast.TypeRef type = field.type() == null ? inferFieldType(field.initializer()) : field.type();
+            scope.define(field.name(), new VarState(
+                    type,
+                    field.bindingKind() == Ast.BindingKind.LET,
+                    kindOfType(type),
+                    Origin.MODULE));
+        }
+    }
+
+    private Ast.TypeRef inferFieldType(Ast.Expr initializer) {
+        if (initializer instanceof Ast.LiteralExpr literal) return inferLiteralType(literal.value());
+        if (initializer instanceof Ast.ListExpr) return Ast.TypeRef.simple("Array");
+        if (initializer instanceof Ast.ObjectExpr) return Ast.TypeRef.simple("obj");
+        if (initializer instanceof Ast.NewExpr created) return created.type();
+        if (initializer instanceof Ast.LambdaExpr) return Ast.TypeRef.simple("Fnc");
+        return Ast.TypeRef.inferred();
+    }
+
+    private void checkClass(Ast.ModuleDecl module, Ast.ClassDecl klass) {
         for (Ast.MethodDecl method : klass.methods()) {
-            Scope scope = new Scope(null);
+            Scope moduleScope = new Scope(null);
+            seedModuleState(module, moduleScope);
+            Scope scope = new Scope(moduleScope);
             if (!method.isStatic()) {
                 // Receiver is immutable unless a future explicit "mut self"
                 // syntax is introduced. Methods can still mutate through an
@@ -93,6 +129,7 @@ public final class OwnershipChecker {
             for (Ast.Param param : method.parameters()) scope.define(param.name(), stateForParam(param));
             checkBlock(method.body(), scope, method.returnType());
             scope.close();
+            moduleScope.close();
         }
     }
 
@@ -142,20 +179,7 @@ public final class OwnershipChecker {
             return;
         }
         if (stmt instanceof Ast.DeferStmt defer) {
-            // The callable produced at registration is owned by the callable-level
-            // defer frame until it is invoked at exit.
-            checkExpr(defer.expression(), scope, true);
-            return;
-        }
-        if (stmt instanceof Ast.RecoverStmt recover) {
-            // Recovery handlers are retained by the current callable frame until
-            // failure unwind completes or the callable returns normally.
-            checkExpr(recover.handler(), scope, true);
-            return;
-        }
-        if (stmt instanceof Ast.PanicStmt panic) {
-            // The panic payload crosses the current callable boundary by value.
-            checkExpr(panic.value(), scope, true);
+            checkExpr(defer.expression(), scope, false);
             return;
         }
         if (stmt instanceof Ast.IfStmt conditional) {
@@ -331,25 +355,15 @@ public final class OwnershipChecker {
             for (Ast.ObjectField field : object.fields()) checkExpr(field.value(), scope, true);
             return new ValueInfo(Ast.TypeRef.simple("obj"), ValueKind.MOVE_ONLY, null);
         }
-        if (expr instanceof Ast.ActorExpr actor) return checkActor(actor, scope);
         if (expr instanceof Ast.LambdaExpr lambda) return checkLambda(lambda, scope, null);
         return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
     }
 
     private ValueInfo checkCall(Ast.CallExpr call, Scope scope) {
-        if (isReadOnlyBuiltinCall(call.callee())) {
-            checkExpr(call.callee(), scope, false);
-            for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, false);
-            return new ValueInfo(Ast.TypeRef.simple("void"), ValueKind.COPY, null);
-        }
-
         if (call.callee() instanceof Ast.NameExpr name) {
             Ast.FunctionDecl fn = findFunction(name.name());
             if (fn != null) {
                 checkArguments(call.arguments(), fn.parameters(), scope, "function " + fn.name());
-                if (isActorCallable(fn)) {
-                    return new ValueInfo(Ast.TypeRef.simple("ActorTask"), ValueKind.COPY, null);
-                }
                 return new ValueInfo(fn.returnType(), kindOfType(fn.returnType()), null);
             }
         }
@@ -367,25 +381,6 @@ public final class OwnershipChecker {
         checkExpr(call.callee(), scope, false);
         for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, true);
         return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
-    }
-
-    private boolean isReadOnlyBuiltinCall(Ast.Expr callee) {
-        String path = memberPath(callee);
-        return path != null && (
-                path.equals("print")
-                || path.equals("stdio.print")
-                || path.equals("stdio.println")
-                || path.equals("stdio.stdout.write")
-                || path.equals("stdio.stdout.println"));
-    }
-
-    private String memberPath(Ast.Expr expr) {
-        if (expr instanceof Ast.NameExpr name) return name.name();
-        if (expr instanceof Ast.MemberExpr member) {
-            String parent = memberPath(member.receiver());
-            return parent == null ? null : parent + "." + member.member();
-        }
-        return null;
     }
 
     private void checkArguments(List<Ast.Expr> arguments, List<Ast.Param> params, Scope scope, String callable) {
@@ -502,33 +497,6 @@ public final class OwnershipChecker {
         else owner.immutableBorrows++;
     }
 
-    private ValueInfo checkActor(Ast.ActorExpr actor, Scope outer) {
-        Ast.LambdaExpr behavior = actor.behavior();
-        CaptureSet captures = collectCaptures(behavior, outer, null);
-
-        if (actor.mode() == Ast.ActorMode.ISOLATE) {
-            for (Capture capture : captures.values.values()) {
-                VarState source = capture.source;
-                source.debugName = capture.name;
-                requireUsable(source, capture.name, capture.write);
-
-                if (capture.write || source.mutable || source.kind != ValueKind.COPY || source.type.isBorrow()) {
-                    throw error("isolate actor cannot capture mutable, borrowed, or move-only outer value '"
-                            + capture.name + "'; pass data through the mailbox instead");
-                }
-            }
-        }
-
-        checkLambda(behavior, outer, null);
-        Ast.TypeRef messageType = behavior.parameters().isEmpty()
-                ? Ast.TypeRef.inferred()
-                : behavior.parameters().getFirst().type();
-        return new ValueInfo(
-                new Ast.TypeRef("Actor", List.of(messageType), false),
-                ValueKind.COPY,
-                null);
-    }
-
     private ValueInfo checkLambda(Ast.LambdaExpr lambda, Scope outer, String recursiveBinding) {
         CaptureSet captures = collectCaptures(lambda, outer, recursiveBinding);
         Scope closure = new Scope(null);
@@ -581,15 +549,7 @@ public final class OwnershipChecker {
             } else if (stmt instanceof Ast.ReturnStmt ret && ret.value() != null) {
                 scanExpr(ret.value(), blockLocals, outer, recursiveBinding, captures, false);
             } else if (stmt instanceof Ast.ExprStmt e) scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
-            else if (stmt instanceof Ast.DeferStmt e) {
-                scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
-            }
-            else if (stmt instanceof Ast.RecoverStmt e) {
-                scanExpr(e.handler(), blockLocals, outer, recursiveBinding, captures, false);
-            }
-            else if (stmt instanceof Ast.PanicStmt e) {
-                scanExpr(e.value(), blockLocals, outer, recursiveBinding, captures, false);
-            }
+            else if (stmt instanceof Ast.DeferStmt e) scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
             else if (stmt instanceof Ast.IfStmt s) {
                 for (Ast.IfBranch b : s.branches()) {
                     scanExpr(b.condition(), blockLocals, outer, recursiveBinding, captures, false);
@@ -648,9 +608,6 @@ public final class OwnershipChecker {
         else if (expr instanceof Ast.ListExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.TupleExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.ObjectExpr e) for (Ast.ObjectField field : e.fields()) scanExpr(field.value(), locals, outer, recursiveBinding, captures, false);
-        else if (expr instanceof Ast.ActorExpr) {
-            // Nested actor behavior performs its own capture analysis when checked.
-        }
         else if (expr instanceof Ast.LambdaExpr) {
             // Nested lambda performs its own capture analysis when checked.
         }
@@ -707,11 +664,6 @@ public final class OwnershipChecker {
         }
         seen.remove(klass);
         return null;
-    }
-
-    private boolean isActorCallable(Ast.FunctionDecl fn) {
-        return fn.annotations().stream().anyMatch(annotation ->
-                annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
     }
 
     private Ast.FunctionDecl findFunction(String name) {
@@ -802,7 +754,7 @@ public final class OwnershipChecker {
         return switch (type.name()) {
             case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
                     "f32","f64","float","decimal","complex64","complex128","complex",
-                    "bool","Bool","string","String","void","Actor","ActorTask" -> true;
+                    "bool","Bool","string","String","void" -> true;
             default -> false;
         };
     }
@@ -821,7 +773,7 @@ public final class OwnershipChecker {
     }
 
     private enum ValueKind { COPY, MOVE_ONLY, IMM_BORROW, MUT_BORROW }
-    private enum Origin { PARAM, LOCAL, CAPTURE }
+    private enum Origin { PARAM, LOCAL, CAPTURE, MODULE }
 
     private static final class ValueInfo {
         private final Ast.TypeRef type;

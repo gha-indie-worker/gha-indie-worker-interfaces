@@ -29,6 +29,7 @@ public record IsolatePolicy(
         STDIN,
         STDOUT,
         PROCESS_INFO,
+        PROCESS_SINGLETON,
         ACTOR_SHARE_READONLY,
         NETWORK,
         FILESYSTEM_READ,
@@ -55,6 +56,10 @@ public record IsolatePolicy(
         if (adversarial && capabilities.contains(Capability.THREAD_CREATE)) {
             throw new IllegalArgumentException("adversarial isolates cannot grant THREAD_CREATE");
         }
+        if (adversarial && capabilities.contains(Capability.PROCESS_SINGLETON)) {
+            throw new IllegalArgumentException("adversarial Graal isolates cannot grant PROCESS_SINGLETON until"
+                    + " a trusted host/supervisor process-singleton coordinator is installed");
+        }
     }
 
     /**
@@ -69,7 +74,7 @@ public record IsolatePolicy(
     public static IsolatePolicy developer() {
         return new IsolatePolicy(
                 Set.of(Capability.STDIN, Capability.STDOUT, Capability.PROCESS_INFO,
-                        Capability.ACTOR_SHARE_READONLY, Capability.HOT_CODE_LOAD),
+                        Capability.PROCESS_SINGLETON, Capability.ACTOR_SHARE_READONLY, Capability.HOT_CODE_LOAD),
                 512L * 1024 * 1024, 8192, Duration.ofMinutes(10), false);
     }
 
@@ -98,6 +103,11 @@ public record IsolatePolicy(
     }
 
     public Context.Builder restrictedContextBuilder(ExecutionProfile profile) {
+        return restrictedContextBuilder(profile, new String[0]);
+    }
+
+    public Context.Builder restrictedContextBuilder(ExecutionProfile profile, String... extraArguments) {
+        validateTrustedExtraArguments(extraArguments);
         HostAccess hostAccess = adversarial
                 ? HostAccess.newBuilder(HostAccess.NONE).allowMutableTargetMappings().methodScoping(true).build()
                 : HostAccess.NONE;
@@ -112,7 +122,7 @@ public record IsolatePolicy(
                 .in(new ByteArrayInputStream(new byte[0]))
                 .out(new ByteArrayOutputStream())
                 .err(new ByteArrayOutputStream())
-                .arguments(OresLanguage.ID, applicationArguments(profile));
+                .arguments(OresLanguage.ID, applicationArguments(profile, extraArguments));
 
         /*
          * Graal's engine.IsolateLibrary option is experimental in 25.x. Opt in
@@ -141,6 +151,38 @@ public record IsolatePolicy(
         return builder;
     }
 
+    private static void validateTrustedExtraArguments(String[] extraArguments) {
+        if (extraArguments == null) return;
+        boolean generationSeen = false;
+        for (String argument : extraArguments) {
+            if (argument == null) {
+                throw new IllegalArgumentException("extra Oreslang context argument cannot be null");
+            }
+            if (!argument.startsWith("--ores-")) continue;
+
+            if (argument.startsWith("--ores-code-generation=")) {
+                if (generationSeen) {
+                    throw new IllegalArgumentException("duplicate --ores-code-generation context metadata");
+                }
+                long generation;
+                try {
+                    generation = Long.parseLong(argument.substring("--ores-code-generation=".length()));
+                } catch (NumberFormatException invalid) {
+                    throw new IllegalArgumentException("invalid --ores-code-generation context metadata", invalid);
+                }
+                if (generation < 0) {
+                    throw new IllegalArgumentException("ores code generation cannot be negative");
+                }
+                generationSeen = true;
+                continue;
+            }
+
+            throw new IllegalArgumentException(
+                    "reserved Oreslang policy argument cannot be overridden through extra context arguments: "
+                            + argument.substring(0, argument.indexOf('=') >= 0 ? argument.indexOf('=') : argument.length()));
+        }
+    }
+
     public boolean allows(Capability capability) {
         return capabilities.contains(capability);
     }
@@ -152,16 +194,25 @@ public record IsolatePolicy(
     }
 
     public String[] applicationArguments(ExecutionProfile profile) {
+        return applicationArguments(profile, new String[0]);
+    }
+
+    public String[] applicationArguments(ExecutionProfile profile, String... extraArguments) {
         String caps = capabilities.stream().map(Enum::name).sorted().collect(Collectors.joining(","));
-        return new String[] {
+        String[] base = new String[] {
                 "--ores-capabilities=" + caps,
                 "--ores-max-heap-bytes=" + maxHeapBytes,
                 "--ores-max-mailbox-messages=" + maxMailboxMessages,
                 "--ores-max-wall-ms=" + maxWallTime.toMillis(),
                 "--ores-adversarial=" + adversarial,
+                "--ores-graal-isolated=" + adversarial,
                 "--ores-execution-mode=" + profile.mode().name(),
                 "--ores-platform=" + profile.platform().name()
         };
+        if (extraArguments == null || extraArguments.length == 0) return base;
+        String[] combined = java.util.Arrays.copyOf(base, base.length + extraArguments.length);
+        System.arraycopy(extraArguments, 0, combined, base.length, extraArguments.length);
+        return combined;
     }
 
     public static IsolatePolicy fromApplicationArguments(String[] args) {
@@ -183,6 +234,15 @@ public record IsolatePolicy(
             for (String value : raw.split(",")) caps.add(Capability.valueOf(value.trim().toUpperCase(Locale.ROOT)));
         }
         return new IsolatePolicy(caps, maxHeap, maxMailbox, Duration.ofMillis(maxWallMs), adversarial);
+    }
+
+    public static boolean graalIsolatedFromApplicationArguments(String[] args) {
+        for (String arg : args) {
+            if (arg.startsWith("--ores-graal-isolated=")) {
+                return Boolean.parseBoolean(arg.substring("--ores-graal-isolated=".length()));
+            }
+        }
+        return false;
     }
 
     public static ExecutionProfile executionProfileFromApplicationArguments(String[] args) {
