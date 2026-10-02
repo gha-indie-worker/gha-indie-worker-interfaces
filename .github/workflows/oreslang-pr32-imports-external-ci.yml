@@ -1,0 +1,46 @@
+name: oreslang-pr32-imports-external-ci
+
+on:
+  push:
+    branches:
+      - ci/oreslang-pr32-imports
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout validation repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Checkout Oreslang PR 32 branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: feat/harden-imports-java-interop
+          path: oreslang-ci
+
+      - name: Verify with JDK 21 Maven
+        run: |
+          docker run --rm \
+            -v "$PWD/oreslang-ci:/work" \
+            -w /work \
+            maven:3.9.11-eclipse-temurin-21 \
+            mvn -B -ntp verify
+
+      - name: Run Oreslang examples
+        run: |
+          docker run --rm \
+            -v "$PWD/oreslang-ci:/work" \
+            -w /work \
+            maven:3.9.11-eclipse-temurin-21 \
+            bash -lc '
+              set -euo pipefail
+              for example in examples/*.ores; do
+                echo "==> $example"
+                mvn -B -ntp -DskipTests compile exec:java -Dexec.args="$example"
+              done
+            '
