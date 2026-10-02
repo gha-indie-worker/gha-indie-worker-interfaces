@@ -69,6 +69,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final ActorId id;
         private final ActorKind kind;
         private final AtomicBoolean alive = new AtomicBoolean(true);
+        private final AtomicBoolean accepting = new AtomicBoolean(true);
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private final CompletableFuture<Void> terminated = new CompletableFuture<>();
 
@@ -160,13 +161,10 @@ public final class ActorRuntime implements AutoCloseable {
     @SuppressWarnings("unchecked")
     public <M> void send(ActorRef<M> ref, M message) {
         if (closed.get()) throw new IllegalStateException("actor runtime is closed");
-        if (!ref.isAlive()) throw new IllegalStateException("actor is not alive " + ref.id());
         ActorCell<M> cell = (ActorCell<M>) actors.get(ref.id());
-        if (cell == null) throw new IllegalStateException("actor is not alive " + ref.id());
+        if (cell == null || !ref.isAlive()) throw new IllegalStateException("actor is not alive " + ref.id());
         Object frozen = freeze(message);
-        if (!cell.mailbox.offer(frozen)) {
-            throw new IllegalStateException("actor mailbox limit exceeded for " + ref.id());
-        }
+        cell.enqueue(frozen);
     }
 
     @SuppressWarnings("unchecked")
@@ -251,6 +249,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final IsolatePolicy policy;
         private final Supplier<? extends Behavior<M>> behaviorFactory;
         private final BlockingQueue<Object> mailbox;
+        private final AtomicBoolean stopRequested = new AtomicBoolean();
         private volatile Thread thread;
 
         private ActorCell(ActorRef<M> ref, IsolatePolicy policy, Supplier<? extends Behavior<M>> behaviorFactory) {
@@ -280,6 +279,7 @@ public final class ActorRuntime implements AutoCloseable {
                     Object message = mailbox.take();
                     if (message == STOP) return;
                     behavior.onMessage((M) message, context);
+                    if (stopRequested.get() && mailbox.isEmpty()) return;
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
@@ -289,21 +289,33 @@ public final class ActorRuntime implements AutoCloseable {
                 // an explicit restart/escalation policy.
                 ref.failure.compareAndSet(null, failure);
             } finally {
+                ref.accepting.set(false);
                 ref.alive.set(false);
                 actors.remove(ref.id(), this);
                 ref.terminated.complete(null);
             }
         }
 
-        private void stop() {
-            if (!ref.isAlive()) return;
-            if (!mailbox.offer(STOP)) {
-                // A full mailbox must not make stop impossible.
-                forceStop();
+        private synchronized void enqueue(Object frozen) {
+            if (!ref.isAlive() || !ref.accepting.get()) {
+                throw new IllegalStateException("actor is not accepting messages " + ref.id());
+            }
+            if (!mailbox.offer(frozen)) {
+                throw new IllegalStateException("actor mailbox limit exceeded for " + ref.id());
             }
         }
 
-        private void forceStop() {
+        private synchronized void stop() {
+            if (!ref.isAlive() || !ref.accepting.compareAndSet(true, false)) return;
+            stopRequested.set(true);
+            // If the queue is full, the actor exits after draining it because
+            // stopRequested is checked after every delivered message.
+            mailbox.offer(STOP);
+        }
+
+        private synchronized void forceStop() {
+            ref.accepting.set(false);
+            stopRequested.set(true);
             mailbox.clear();
             mailbox.offer(STOP);
             Thread t = thread;
