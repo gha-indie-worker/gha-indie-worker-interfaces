@@ -132,9 +132,18 @@ public final class OresEvalRootNode extends RootNode {
             }
 
             RuntimeException deferFailure = drainDeferred(frame);
-            RuntimeException failure = bodyFailure;
-            if (failure != null && deferFailure != null) failure.addSuppressed(deferFailure);
-            else if (failure == null) failure = deferFailure;
+            RuntimeException failure;
+            if (bodyFailure instanceof java.util.concurrent.CancellationException) {
+                failure = bodyFailure;
+                if (deferFailure != null && deferFailure != failure) failure.addSuppressed(deferFailure);
+            } else if (deferFailure instanceof java.util.concurrent.CancellationException) {
+                failure = deferFailure;
+                if (bodyFailure != null && bodyFailure != failure) failure.addSuppressed(bodyFailure);
+            } else {
+                failure = bodyFailure;
+                if (failure != null && deferFailure != null) failure.addSuppressed(deferFailure);
+                else if (failure == null) failure = deferFailure;
+            }
 
             if (failure != null) {
                 if (failure instanceof java.util.concurrent.CancellationException) throw failure;
@@ -169,8 +178,15 @@ public final class OresEvalRootNode extends RootNode {
                 try {
                     frame.deferred.pop().call(List.of());
                 } catch (RuntimeException failure) {
-                    if (firstFailure == null) firstFailure = failure;
-                    else firstFailure.addSuppressed(failure);
+                    if (firstFailure == null) {
+                        firstFailure = failure;
+                    } else if (failure instanceof java.util.concurrent.CancellationException
+                            && !(firstFailure instanceof java.util.concurrent.CancellationException)) {
+                        failure.addSuppressed(firstFailure);
+                        firstFailure = failure;
+                    } else {
+                        firstFailure.addSuppressed(failure);
+                    }
                 }
             }
             return firstFailure;
@@ -234,15 +250,46 @@ public final class OresEvalRootNode extends RootNode {
                 return;
             }
             if (stmt instanceof Ast.TryStmt tried) {
-                try { executeBlock(tried.body(), env, frame); }
-                catch (ReturnSignal signal) { throw signal; }
-                catch (BreakSignal | ContinueSignal signal) { throw signal; }
-                catch (java.util.concurrent.CancellationException cancellation) { throw cancellation; }
-                catch (RuntimeException failure) {
-                    Env catchEnv = new Env(env);
-                    catchEnv.define(tried.errorName(), failureValue(failure), Ast.BindingKind.VAL);
-                    executeBlock(tried.catchBody(), catchEnv, frame);
-                } finally { executeBlock(tried.finallyBody(), env, frame); }
+                RuntimeException pending = null;
+
+                try {
+                    try {
+                        executeBlock(tried.body(), env, frame);
+                    } catch (ReturnSignal signal) {
+                        throw signal;
+                    } catch (BreakSignal | ContinueSignal signal) {
+                        throw signal;
+                    } catch (java.util.concurrent.CancellationException cancellation) {
+                        throw cancellation;
+                    } catch (RuntimeException failure) {
+                        Env catchEnv = new Env(env);
+                        catchEnv.define(tried.errorName(), failureValue(failure), Ast.BindingKind.VAL);
+                        executeBlock(tried.catchBody(), catchEnv, frame);
+                    }
+                } catch (RuntimeException escaping) {
+                    pending = escaping;
+                }
+
+                RuntimeException finalFailure = null;
+                try {
+                    executeBlock(tried.finallyBody(), env, frame);
+                } catch (RuntimeException escapingFinally) {
+                    finalFailure = escapingFinally;
+                }
+
+                if (pending instanceof java.util.concurrent.CancellationException) {
+                    if (finalFailure != null && finalFailure != pending) pending.addSuppressed(finalFailure);
+                    throw pending;
+                }
+                if (finalFailure instanceof java.util.concurrent.CancellationException) {
+                    if (pending != null && pending != finalFailure) finalFailure.addSuppressed(pending);
+                    throw finalFailure;
+                }
+                if (finalFailure != null) {
+                    if (pending != null && pending != finalFailure) finalFailure.addSuppressed(pending);
+                    throw finalFailure;
+                }
+                if (pending != null) throw pending;
                 return;
             }
             if (stmt instanceof Ast.ForOfStmt loop) {
