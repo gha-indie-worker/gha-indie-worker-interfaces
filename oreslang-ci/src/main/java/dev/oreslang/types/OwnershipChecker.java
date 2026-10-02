@@ -337,6 +337,12 @@ public final class OwnershipChecker {
     }
 
     private ValueInfo checkCall(Ast.CallExpr call, Scope scope) {
+        if (isReadOnlyBuiltinCall(call.callee())) {
+            checkExpr(call.callee(), scope, false);
+            for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, false);
+            return new ValueInfo(Ast.TypeRef.simple("void"), ValueKind.COPY, null);
+        }
+
         if (call.callee() instanceof Ast.NameExpr name) {
             Ast.FunctionDecl fn = findFunction(name.name());
             if (fn != null) {
@@ -358,6 +364,25 @@ public final class OwnershipChecker {
         checkExpr(call.callee(), scope, false);
         for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, true);
         return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
+    }
+
+    private boolean isReadOnlyBuiltinCall(Ast.Expr callee) {
+        String path = memberPath(callee);
+        return path != null && (
+                path.equals("print")
+                || path.equals("stdio.print")
+                || path.equals("stdio.println")
+                || path.equals("stdio.stdout.write")
+                || path.equals("stdio.stdout.println"));
+    }
+
+    private String memberPath(Ast.Expr expr) {
+        if (expr instanceof Ast.NameExpr name) return name.name();
+        if (expr instanceof Ast.MemberExpr member) {
+            String parent = memberPath(member.receiver());
+            return parent == null ? null : parent + "." + member.member();
+        }
+        return null;
     }
 
     private void checkArguments(List<Ast.Expr> arguments, List<Ast.Param> params, Scope scope, String callable) {
