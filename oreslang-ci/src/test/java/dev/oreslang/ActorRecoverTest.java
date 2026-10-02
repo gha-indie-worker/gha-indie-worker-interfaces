@@ -1,6 +1,8 @@
 package dev.oreslang;
 
+import dev.oreslang.compiler.OresCompiler;
 import dev.oreslang.parser.Parser;
+import dev.oreslang.runtime.IsolatePolicy;
 import dev.oreslang.types.TypeChecker;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
@@ -8,6 +10,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -272,6 +276,52 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void capabilityCheckerDescendsIntoActorBodies() {
+        IsolatePolicy denyAll = denyAllPolicy();
+
+        assertThrows(SecurityException.class, () ->
+                OresCompiler.validateForIsolate("""
+                        pub routine main() => void {
+                          val worker = actor |String msg| -> {
+                            stdio.println(msg);
+                          };
+                        }
+                        """, denyAll));
+    }
+
+    @Test
+    void capabilityCheckerDescendsIntoRecoverHandlers() {
+        IsolatePolicy denyAll = denyAllPolicy();
+
+        assertThrows(SecurityException.class, () ->
+                OresCompiler.validateForIsolate("""
+                        fnc inner() => void {
+                          recover |err| -> {
+                            stdio.println(err);
+                            return;
+                          };
+                          panic "boom";
+                        }
+
+                        pub routine main() => void {
+                          inner();
+                        }
+                        """, denyAll));
+    }
+
+    @Test
+    void capabilityCheckerDescendsIntoPanicPayloads() {
+        IsolatePolicy denyAll = denyAllPolicy();
+
+        assertThrows(SecurityException.class, () ->
+                OresCompiler.validateForIsolate("""
+                        pub routine main() => void {
+                          panic process.context_id;
+                        }
+                        """, denyAll));
+    }
+
+    @Test
     void panicCountsAsTerminatingPathForNonVoidCallable() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
                 fnc value_or_panic(bool ok) => int {
@@ -282,6 +332,15 @@ final class ActorRecoverTest {
                   fi
                 }
                 """)));
+    }
+
+    private static IsolatePolicy denyAllPolicy() {
+        return new IsolatePolicy(
+                Set.of(),
+                64L * 1024 * 1024,
+                128,
+                Duration.ofSeconds(5),
+                false);
     }
 
     private static String run(String program) throws Exception {
