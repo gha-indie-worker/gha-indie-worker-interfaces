@@ -3,7 +3,7 @@ name: oreslang-pr16-external-ci
 on:
   push:
     branches:
-      - ci/oreslang-pr16
+      - ci/oreslang-actor-recover
   pull_request:
     branches:
       - main
