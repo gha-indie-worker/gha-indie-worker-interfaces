@@ -477,6 +477,7 @@ public final class OresEvalRootNode extends RootNode {
 
                 return context.actors().spawn(kind, () -> (message, actorContext) -> {
                     Env local = new Env(captured);
+                    local.define("self", actorContext.self(), Ast.BindingKind.VAL);
                     local.define(messageParam.name(), message,
                             messageParam.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
                     executeCallableBody(behavior.blockBody(), local);
