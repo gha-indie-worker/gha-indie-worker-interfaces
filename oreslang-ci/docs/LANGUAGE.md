@@ -224,7 +224,7 @@ end
 
 Class interface satisfaction uses public members, including inherited public members.
 
-## Option and null
+## Option, Result, and null
 
 Oreslang does **not** have ambient nullable references. A bare `null` value is a compile-time error, and `null` is not a standalone variable/parameter/return type.
 
@@ -239,6 +239,34 @@ fnc lookup(bool found) => Option<int> {
   fi
 }
 ```
+
+Fallible operations use `Result<T, E>`, constructed with `Ok(value)` or `Err(error)`. `Result` always has exactly two explicit type arguments.
+
+Extraction follows Rust's ownership model:
+
+```ores
+val Option<int> present = Some(42);
+val number = present.unwrap();             // 42
+
+val Option<int> missing = None;
+val safe = missing.unwrap_safe();          // Err(OptionUnwrapError(...))
+
+val Result<int, String> parsed = Ok(123);
+val same = parsed.unwrap_safe();            // Ok(123), still an error-as-value carrier
+```
+
+- `Option<T>.unwrap() -> T` returns the `Some` payload and **panics** on `None`.
+- `Option<T>.unwrap_safe() -> Result<T, OptionUnwrapError>` never panics for an absent option.
+- `Result<T,E>.unwrap() -> T` returns the `Ok` payload and panics on `Err`.
+- `Result<T,E>.unwrap_safe() -> Result<T,E>` never panics; it preserves the existing error-as-a-value carrier.
+- `expect(String)` is the descriptive panicking form; `unwrap_or(T)` supplies a fallback.
+- `is_some()/is_none()` and `is_ok()/is_err()` inspect the variant without extracting it.
+
+Like Rust methods that take `self`, `unwrap`, `unwrap_safe`, `expect`, and `unwrap_or` consume a move-only `Option` or `Result`. If the complete container type is `Copy`, the call operates on a copy. `Option<T>` is `Copy` exactly when `T` is `Copy`; `Result<T,E>` is `Copy` exactly when both `T` and `E` are `Copy`.
+
+An owned `Option`/`Result` cannot be used to smuggle a lexical borrow into longer-lived storage. Until explicit lifetime parameters exist, `Some(&value)`, `Ok(&value)`, and `Err(&value)` are rejected. This keeps sum types aligned with the borrow checker rather than creating a lifetime escape hatch.
+
+Panics are distinct from ordinary recoverable errors. Normal `try/catch` handles ordinary exceptions/errors, while `unwrap()` raises a language panic; lexical cleanup and `finally` still run during unwind. Code that wants absence/failure as data should use `unwrap_safe()`, matching, or explicit variant inspection instead.
 
 `Option<null>` is accepted only as an explicit type-level escape hatch when an interoperability boundary truly needs to preserve a null marker. The `null` marker cannot escape that direct `Option<null>` position. `Option<void>` is invalid; use `void` when a function returns no value.
 

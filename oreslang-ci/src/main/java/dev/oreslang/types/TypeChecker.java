@@ -556,10 +556,21 @@ public final class TypeChecker {
                 }
                 return new Named(factory.name(), List.of(element));
             }
-            if (call.callee() instanceof Ast.NameExpr name && name.name().equals("Some")) {
-                if (call.typeArgumentsPresent()) throw new IllegalArgumentException("Some does not accept call-site type arguments");
-                if (call.arguments().size() != 1) throw new IllegalArgumentException("Some expects exactly one value");
-                return new Named("Option", List.of(typeOf(call.arguments().getFirst(), env, generics, self)));
+            if (call.callee() instanceof Ast.NameExpr name
+                    && (name.name().equals("Some") || name.name().equals("Ok") || name.name().equals("Err"))) {
+                if (call.typeArgumentsPresent()) {
+                    throw new IllegalArgumentException(name.name() + " does not accept call-site type arguments");
+                }
+                if (call.arguments().size() != 1) {
+                    throw new IllegalArgumentException(name.name() + " expects exactly one value");
+                }
+                Type value = widenCollectionElement(typeOf(call.arguments().getFirst(), env, generics, self));
+                return switch (name.name()) {
+                    case "Some" -> new Named("Option", List.of(value));
+                    case "Ok" -> new Named("Result", List.of(value, Unknown.INSTANCE));
+                    case "Err" -> new Named("Result", List.of(Unknown.INSTANCE, value));
+                    default -> throw new IllegalStateException("unreachable sum constructor");
+                };
             }
             if (call.callee() instanceof Ast.MemberExpr member) {
                 Type receiver = deref(typeOf(member.receiver(), env, generics, self));
@@ -655,6 +666,14 @@ public final class TypeChecker {
                 if (member.member().equals("stdout")) return new Named("stdio.stdout", List.of());
             }
             Type receiver = typeOf(member.receiver(), env, generics, self);
+            Type sumReceiver = deref(receiver);
+            Type sumMember = builtinOptionResultMember(sumReceiver, member.member());
+            if (sumMember != null) return sumMember;
+            if (sumReceiver instanceof Named sumNamed
+                    && (sumNamed.name().equals("Option") || sumNamed.name().equals("Result"))) {
+                throw new IllegalArgumentException(
+                        "unknown " + sumNamed.name() + " member '" + member.member() + "'");
+            }
             Type mutexMember = builtinMutexMember(receiver, member.member());
             if (mutexMember != null) return mutexMember;
             receiver = unwrapMutexGuard(receiver);
@@ -967,8 +986,14 @@ public final class TypeChecker {
         if (!(type instanceof Named named)) return false;
 
         if (named.name().equals("Mutex") || named.name().equals("MutexGuard") || named.name().equals("Future")) return false;
+        if (named.name().equals("OptionUnwrapError")) return named.arguments().isEmpty();
         if (named.name().equals("Option") || named.name().equals("SharedMutex")) {
             return named.arguments().size() == 1 && isSharedSafe(named.arguments().getFirst(), seen, genericBindings);
+        }
+        if (named.name().equals("Result")) {
+            return named.arguments().size() == 2
+                    && isSharedSafe(named.arguments().get(0), seen, genericBindings)
+                    && isSharedSafe(named.arguments().get(1), seen, genericBindings);
         }
 
         for (Type argument : named.arguments()) {
@@ -1040,6 +1065,38 @@ public final class TypeChecker {
             return new Record(members);
         }
         return type;
+    }
+
+    private Type builtinOptionResultMember(Type receiver, String member) {
+        if (!(receiver instanceof Named named)) return null;
+        if (named.name().equals("Option") && named.arguments().size() == 1) {
+            Type element = named.arguments().getFirst();
+            return switch (member) {
+                case "is_some", "is_none" -> new Function(List.of(), Primitive.BOOL);
+                case "unwrap" -> new Function(List.of(), element);
+                case "unwrap_safe" -> new Function(
+                        List.of(),
+                        new Named("Result", List.of(element, new Named("OptionUnwrapError", List.of()))));
+                case "expect" -> new Function(List.of(Primitive.STRING), element);
+                case "unwrap_or" -> new Function(List.of(element), element);
+                default -> null;
+            };
+        }
+        if (named.name().equals("Result") && named.arguments().size() == 2) {
+            Type ok = named.arguments().get(0);
+            Type err = named.arguments().get(1);
+            return switch (member) {
+                case "is_ok", "is_err" -> new Function(List.of(), Primitive.BOOL);
+                case "unwrap" -> new Function(List.of(), ok);
+                // Result is already the language's error-as-a-value carrier.  The
+                // safe form therefore preserves the Result instead of panicking.
+                case "unwrap_safe" -> new Function(List.of(), named);
+                case "expect" -> new Function(List.of(Primitive.STRING), ok);
+                case "unwrap_or" -> new Function(List.of(ok), ok);
+                default -> null;
+            };
+        }
+        return null;
     }
 
     private Type builtinMutexMember(Type receiver, String member) {
@@ -1816,6 +1873,14 @@ public final class TypeChecker {
                 Type element = resolve(ref.arguments().getFirst(), generics, self, true);
                 if (element == Primitive.VOID) throw new IllegalArgumentException("Option<void> is invalid; use void for no return value");
                 yield new Named("Option", List.of(element));
+            }
+            case "Result" -> {
+                if (ref.inferArguments() || ref.arguments().size() != 2) {
+                    throw new IllegalArgumentException("Result requires exactly two explicit type arguments");
+                }
+                yield new Named("Result", List.of(
+                        resolve(ref.arguments().get(0), generics, self),
+                        resolve(ref.arguments().get(1), generics, self)));
             }
             case "MutexGuard" -> throw new IllegalArgumentException(
                     "MutexGuard<T> is compiler-managed and cannot be named in source declarations; acquire it from lock()/try_lock()/lock_async()");

@@ -201,6 +201,7 @@ public final class OresEvalRootNode extends RootNode {
             if (stmt instanceof Ast.TryStmt tried) {
                 try { executeBlock(tried.body(), env); }
                 catch (ReturnSignal signal) { throw signal; }
+                catch (OresPanic panic) { throw panic; }
                 catch (RuntimeException failure) {
                     Env catchEnv = new Env(env);
                     catchEnv.define(tried.errorName(), failure, Ast.BindingKind.VAL);
@@ -251,6 +252,14 @@ public final class OresEvalRootNode extends RootNode {
                     return new OptionValue(true, args.getFirst());
                 };
                 if (name.name().equals("None")) return new OptionValue(false, null);
+                if (name.name().equals("Ok")) return (Invokable) args -> {
+                    requireOne(args, "Ok");
+                    return new ResultValue(true, args.getFirst());
+                };
+                if (name.name().equals("Err")) return (Invokable) args -> {
+                    requireOne(args, "Err");
+                    return new ResultValue(false, args.getFirst());
+                };
                 Ast.ModuleDecl module = modules.get(name.name());
                 if (module != null) return new ModuleFacade(module);
                 Ast.ClassDecl klass = findClass(name.name());
@@ -429,6 +438,8 @@ public final class OresEvalRootNode extends RootNode {
                 if (!name.equals("new")) throw new IllegalArgumentException("unknown mutex factory member " + name);
                 return (Invokable) factory::create;
             }
+            if (receiver instanceof OptionValue option) return optionMember(option, name);
+            if (receiver instanceof ResultValue result) return resultMember(result, name);
             if (receiver instanceof OresMutex.Lock<?> lock) return mutexMember(lock, name);
             if (receiver instanceof OresMutex.Guard<?> guard) {
                 return switch (name) {
@@ -456,6 +467,62 @@ public final class OresEvalRootNode extends RootNode {
                 return map.get(name);
             }
             throw new IllegalArgumentException("cannot access member '" + name + "' on " + receiver);
+        }
+
+        private Object optionMember(OptionValue option, String name) {
+            return switch (name) {
+                case "is_some" -> (Invokable) args -> { requireZero(args, "Option.is_some"); return option.present(); };
+                case "is_none" -> (Invokable) args -> { requireZero(args, "Option.is_none"); return !option.present(); };
+                case "unwrap" -> (Invokable) args -> {
+                    requireZero(args, "Option.unwrap");
+                    if (!option.present()) throw new OresPanic("called Option::unwrap() on a None value");
+                    return option.value();
+                };
+                case "unwrap_safe" -> (Invokable) args -> {
+                    requireZero(args, "Option.unwrap_safe");
+                    return option.present()
+                            ? new ResultValue(true, option.value())
+                            : new ResultValue(false, new OptionUnwrapError("None"));
+                };
+                case "expect" -> (Invokable) args -> {
+                    String message = requireStringArg(args, "Option.expect");
+                    if (!option.present()) throw new OresPanic(message);
+                    return option.value();
+                };
+                case "unwrap_or" -> (Invokable) args -> {
+                    requireOne(args, "Option.unwrap_or");
+                    return option.present() ? option.value() : args.getFirst();
+                };
+                default -> throw new IllegalArgumentException("unknown Option member " + name);
+            };
+        }
+
+        private Object resultMember(ResultValue result, String name) {
+            return switch (name) {
+                case "is_ok" -> (Invokable) args -> { requireZero(args, "Result.is_ok"); return result.ok(); };
+                case "is_err" -> (Invokable) args -> { requireZero(args, "Result.is_err"); return !result.ok(); };
+                case "unwrap" -> (Invokable) args -> {
+                    requireZero(args, "Result.unwrap");
+                    if (!result.ok()) {
+                        throw new OresPanic("called Result::unwrap() on an Err value: " + display(result.value()));
+                    }
+                    return result.value();
+                };
+                case "unwrap_safe" -> (Invokable) args -> {
+                    requireZero(args, "Result.unwrap_safe");
+                    return result;
+                };
+                case "expect" -> (Invokable) args -> {
+                    String message = requireStringArg(args, "Result.expect");
+                    if (!result.ok()) throw new OresPanic(message + ": " + display(result.value()));
+                    return result.value();
+                };
+                case "unwrap_or" -> (Invokable) args -> {
+                    requireOne(args, "Result.unwrap_or");
+                    return result.ok() ? result.value() : args.getFirst();
+                };
+                default -> throw new IllegalArgumentException("unknown Result member " + name);
+            };
         }
 
         @SuppressWarnings("unchecked")
@@ -915,6 +982,10 @@ public final class OresEvalRootNode extends RootNode {
                 if (option.present()) releaseMutexGuardsInValue(option.value(), failed, seen);
                 return;
             }
+            if (value instanceof ResultValue result) {
+                releaseMutexGuardsInValue(result.value(), failed, seen);
+                return;
+            }
             if (value instanceof OresMutex.GuardFuture<?> future) {
                 if (!future.isDone()) {
                     future.cancel(true);
@@ -1018,6 +1089,10 @@ public final class OresEvalRootNode extends RootNode {
             if (value instanceof OptionValue option) {
                 return !option.present() || runtimeSharedSafe(option.value(), seen);
             }
+            if (value instanceof ResultValue result) {
+                return runtimeSharedSafe(result.value(), seen);
+            }
+            if (value instanceof OptionUnwrapError) return true;
             if (value instanceof ActorRuntime.Shared<?> readonly) {
                 return runtimeSharedSafe(readonly.value(), seen);
             }
@@ -1051,6 +1126,15 @@ public final class OresEvalRootNode extends RootNode {
     private record OptionValue(boolean present, Object value) {
         @Override public String toString(){return present ? "Some(" + value + ")" : "None";}
     }
+    private record ResultValue(boolean ok, Object value) {
+        @Override public String toString(){return ok ? "Ok(" + value + ")" : "Err(" + value + ")";}
+    }
+    private record OptionUnwrapError(String reason) {
+        @Override public String toString(){return "OptionUnwrapError(" + reason + ")";}
+    }
+    private static final class OresPanic extends RuntimeException {
+        private OresPanic(String message) { super(message, null, false, false); }
+    }
     private record StdioFacade(OresContext context) {
         private Object print(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.print");requireOne(args,"stdio.print");context.output().print(String.valueOf(args.getFirst()));context.output().flush();return null;}
         private Object println(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.println");requireOne(args,"stdio.println");context.output().println(String.valueOf(args.getFirst()));return null;}
@@ -1066,4 +1150,9 @@ public final class OresEvalRootNode extends RootNode {
     }
     private static void requireZero(List<Object> args,String name){if(!args.isEmpty())throw new IllegalArgumentException(name+" expects no arguments");}
     private static void requireOne(List<Object> args,String name){if(args.size()!=1)throw new IllegalArgumentException(name+" expects one argument");}
+    private static String requireStringArg(List<Object> args,String name){
+        requireOne(args,name);
+        if(!(args.getFirst() instanceof String message)) throw new IllegalArgumentException(name+" expects a String message");
+        return message;
+    }
 }
