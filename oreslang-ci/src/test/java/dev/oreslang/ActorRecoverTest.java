@@ -429,7 +429,8 @@ final class ActorRecoverTest {
                         }
                         """)));
 
-        assertTrue(error.getMessage().contains("main is the root/process entrypoint"));
+        assertTrue(error.getMessage().contains("main is a file/module lifecycle entrypoint"));
+        assertTrue(error.getMessage().contains("cannot be declared actor"));
     }
 
     @Test
