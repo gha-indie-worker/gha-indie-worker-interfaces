@@ -288,6 +288,10 @@ public final class ActorRuntime implements AutoCloseable {
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
+            } catch (CancellationException cancellation) {
+                if (!closed.get() && !stopRequested.get()) {
+                    ref.failure.compareAndSet(null, cancellation);
+                }
             } catch (Throwable failure) {
                 // Fail-stop by actor: never escape onto the spawning/main thread.
                 // Supervisors may observe failure through the ActorRef and choose
