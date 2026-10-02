@@ -40,6 +40,9 @@ public final class Parser {
             Modifiers modifiers = parseModifiers();
 
             if (match(DEFINE)) {
+                if (modifiers.actor) {
+                    throw error(previous(), "actor modifier is only valid on fnc or routine declarations");
+                }
                 boolean afterDefineAbstract = match(ABSTRACT);
                 if (match(MODULE)) {
                     if (modifiers.visibility != Ast.Visibility.PRIVATE || modifiers.async || modifiers.isStatic || modifiers.isAbstract || modifiers.actor) {
@@ -122,6 +125,9 @@ public final class Parser {
         Modifiers modifiers = parseModifiers();
 
         if (match(DEFINE)) {
+            if (modifiers.actor) {
+                throw error(previous(), "actor modifier is only valid on fnc or routine declarations");
+            }
             boolean afterDefineAbstract = match(ABSTRACT);
             if (match(CLASS)) return parseClass(modifiers.isAbstract || afterDefineAbstract);
             if (match(INTERFACE)) return parseInterface(modifiers.visibility);
@@ -136,6 +142,9 @@ public final class Parser {
     private Ast.Decl parseDeclarationAfterModifiers(List<Ast.Annotation> annotations, Modifiers modifiers) {
         if (match(FNC)) return parseFunction(annotations, modifiers, Ast.CallableKind.FNC);
         if (match(ROUTINE)) return parseFunction(annotations, modifiers, Ast.CallableKind.ROUTINE);
+        if (modifiers.actor) {
+            throw error(peek(), "actor modifier is only valid on fnc or routine declarations");
+        }
         if (match(INTERFACE)) return parseInterface(modifiers.visibility);
         if (match(TYPE)) return parseTypeAlias();
         if (isBindingKind(peek().type())) return parseModuleBinding(modifiers.visibility);
@@ -204,7 +213,10 @@ public final class Parser {
         List<Ast.InterfaceMember> members = new ArrayList<>();
         while (!check(terminator) && !check(EOF)) {
             parseAnnotations();
-            parseModifiers();
+            Modifiers memberModifiers = parseModifiers();
+            if (memberModifiers.actor) {
+                throw error(peek(), "actor modifier is not valid on interface members");
+            }
 
             if (match(FNC)) {
                 String memberName = consume(IDENT, "expected interface function name").lexeme();
