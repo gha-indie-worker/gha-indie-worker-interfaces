@@ -1,0 +1,29 @@
+namespace type_boundaries_demo;
+
+define interface Named
+  fnc name() => String;
+end
+
+define class User implements Named
+  pub val String label = "Ada";
+
+  pub name() => String {
+    return self.label;
+  }
+
+  pub static fnc kind() => String {
+    return "user";
+  }
+end
+
+fnc print_named(Named value) => void {
+  stdio.println(value.name());
+  return;
+}
+
+pub routine main() => void {
+  val user = new User();
+  print_named(user);
+  stdio.println(User.kind());
+  return;
+}
