@@ -803,6 +803,13 @@ public final class TypeChecker {
                     ? Primitive.VOID
                     : typeOf(ret.value(), env, generics, self));
         }
+        if (stmt instanceof Ast.RecoverStmt recover) {
+            Type handler = typeOf(recover.handler(), env, generics, self);
+            if (handler instanceof Function fn && fn.parameters().size() == 1) {
+                return LambdaReturnSummary.of(fn.result());
+            }
+            return LambdaReturnSummary.none();
+        }
         if (stmt instanceof Ast.IfStmt conditional) {
             LambdaReturnSummary result = LambdaReturnSummary.none();
             for (Ast.IfBranch branch : conditional.branches()) {
