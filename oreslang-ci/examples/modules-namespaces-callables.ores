@@ -27,8 +27,9 @@ end
 pub routine main() => void {
   val IntFn addTen = closures.makeAdder(10);
 
-  stdio.println(math.factorial(5));
-  stdio.println(addTen(7));
+  stdio.stdout.write(math.factorial(5));
+  stdio.stdout.write("|");
+  stdio.stdout.write(addTen(7));
 
   return;
 }

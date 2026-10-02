@@ -1,4 +1,0 @@
-pub routine main() => void {
-  stdio.println("hello from oreslang");
-  return;
-}

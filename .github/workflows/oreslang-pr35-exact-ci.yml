@@ -1,0 +1,30 @@
+name: oreslang-pr35-exact-ci
+
+on:
+  push:
+    branches:
+      - ci/oreslang-pr35-exact-20261002
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify exact PR 35 Oreslang mirror in JDK 21 Maven container
+        run: |
+          docker run --rm             -v "$PWD/oreslang-ci:/work"             -w /work             maven:3.9.11-eclipse-temurin-21             mvn -B -ntp verify
+
+      - name: Run source examples
+        run: |
+          docker run --rm             -v "$PWD/oreslang-ci:/work"             -w /work             maven:3.9.11-eclipse-temurin-21             bash -lc '
+              set -euo pipefail
+              for example in examples/*.ores; do
+                echo "==> $example"
+                mvn -B -ntp -DskipTests compile exec:java -Dexec.args="$example"
+              done
+            '

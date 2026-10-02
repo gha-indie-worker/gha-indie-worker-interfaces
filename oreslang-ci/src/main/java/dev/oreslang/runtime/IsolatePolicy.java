@@ -30,6 +30,7 @@ public record IsolatePolicy(
         STDOUT,
         PROCESS_INFO,
         ACTOR_SHARE_READONLY,
+        SHARED_MEMORY,
         NETWORK,
         FILESYSTEM_READ,
         FILESYSTEM_WRITE,
@@ -69,7 +70,7 @@ public record IsolatePolicy(
     public static IsolatePolicy developer() {
         return new IsolatePolicy(
                 Set.of(Capability.STDIN, Capability.STDOUT, Capability.PROCESS_INFO,
-                        Capability.ACTOR_SHARE_READONLY, Capability.HOT_CODE_LOAD),
+                        Capability.ACTOR_SHARE_READONLY, Capability.SHARED_MEMORY, Capability.HOT_CODE_LOAD),
                 512L * 1024 * 1024, 8192, Duration.ofMinutes(10), false);
     }
 
@@ -78,6 +79,14 @@ public record IsolatePolicy(
                 ? EnumSet.noneOf(Capability.class)
                 : EnumSet.copyOf(capabilities);
         next.addAll(Arrays.asList(added));
+        return new IsolatePolicy(next, maxHeapBytes, maxMailboxMessages, maxWallTime, adversarial);
+    }
+
+    public IsolatePolicy withoutCapabilities(Capability... removed) {
+        EnumSet<Capability> next = capabilities.isEmpty()
+                ? EnumSet.noneOf(Capability.class)
+                : EnumSet.copyOf(capabilities);
+        next.removeAll(Arrays.asList(removed));
         return new IsolatePolicy(next, maxHeapBytes, maxMailboxMessages, maxWallTime, adversarial);
     }
 

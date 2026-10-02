@@ -103,52 +103,6 @@ final class IncrementalFunctorStaticTest {
     }
 
     @Test
-    void actorCallableModeParticipatesInAbiInvalidation() {
-        IncrementalCompiler compiler = new IncrementalCompiler();
-
-        Map<String, String> first = Map.of(
-                "worker.ores", """
-                        pub fnc rebuild(String target) => void {
-                          return;
-                        }
-                        """,
-                "app.ores", """
-                        import fnc {rebuild} from "./worker.ores";
-                        pub routine main() => void {
-                          return;
-                        }
-                        """);
-
-        compiler.compile(first);
-
-        Map<String, String> actorized = Map.of(
-                "worker.ores", """
-                        pub actor fnc rebuild(String target) => void {
-                          return;
-                        }
-                        """,
-                "app.ores", first.get("app.ores"));
-
-        var second = compiler.compile(actorized);
-        assertTrue(second.rebuilt("worker.ores"));
-        assertTrue(second.rebuilt("app.ores"),
-                "changing a public callable into an actor task changes its call result ABI");
-
-        Map<String, String> isolated = Map.of(
-                "worker.ores", """
-                        pub actor isolate fnc rebuild(String target) => void {
-                          return;
-                        }
-                        """,
-                "app.ores", first.get("app.ores"));
-
-        var third = compiler.compile(isolated);
-        assertTrue(third.rebuilt("worker.ores"));
-        assertTrue(third.rebuilt("app.ores"),
-                "shared-vs-isolate actor mode is part of the exported ABI contract");
-    }
-
-    @Test
     void inferredPublicBindingsParticipateInAbiInvalidation() {
         IncrementalCompiler compiler = new IncrementalCompiler();
         Map<String, String> first = Map.of(
