@@ -17,6 +17,43 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class ActorRecoverTest {
     @Test
+    void recoverHandlerDoesNotRunOnSuccessfulReturn() throws Exception {
+        String output = run("""
+                fnc inner() => int {
+                  recover |err| -> {
+                    stdio.stdout.write("R");
+                    return 0;
+                  };
+
+                  stdio.stdout.write("S");
+                  return 7;
+                }
+
+                pub routine main() => void {
+                  stdio.stdout.write(inner());
+                }
+                """);
+
+        assertEquals("S7", output);
+    }
+
+    @Test
+    void recoverFallbackMustMatchEnclosingCallableResult() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                TypeChecker.check(Parser.parse("""
+                        fnc inner() => int {
+                          recover |err| -> {
+                            return "wrong";
+                          };
+
+                          panic "boom";
+                        }
+                        """)));
+
+        assertTrue(error.getMessage().contains("recover handler result"));
+    }
+
+    @Test
     void recoverConsumesPanicBeforeCallerTryCatch() throws Exception {
         String output = run("""
                 fnc inner() => void {
