@@ -1,5 +1,6 @@
 package dev.oreslang;
 
+import dev.oreslang.ast.Ast;
 import dev.oreslang.parser.Lexer;
 import dev.oreslang.parser.Parser;
 import dev.oreslang.parser.Token;
@@ -106,6 +107,61 @@ final class ReservedKeywordTest {
                     }
                     """.formatted(keyword), keyword);
         }
+    }
+
+    @Test
+    void constructedAstCannotBypassReservedKeywordInvariant() {
+        for (String keyword : RESERVED) {
+            Ast.FunctionDecl function = new Ast.FunctionDecl(
+                    "f",
+                    Ast.CallableKind.FNC,
+                    Ast.Visibility.PRIVATE,
+                    false,
+                    List.of(),
+                    List.of(new Ast.Param(Ast.TypeRef.simple("int"), keyword)),
+                    Ast.TypeRef.simple("void"),
+                    List.of(),
+                    List.of(new Ast.ReturnStmt(null)));
+
+            Ast.Program program = new Ast.Program(List.of(
+                    new Ast.ModuleDecl("m", List.of(function))));
+
+            IllegalArgumentException error = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(program));
+
+            assertTrue(
+                    error.getMessage().contains("reserved keyword '" + keyword + "'"),
+                    () -> "AST validator failed to reject '" + keyword + "': " + error.getMessage());
+        }
+    }
+
+    @Test
+    void constructedMemberAndTypeNamesCannotBypassReservation() {
+        Ast.FunctionDecl memberUse = new Ast.FunctionDecl(
+                "f",
+                Ast.CallableKind.FNC,
+                Ast.Visibility.PRIVATE,
+                false,
+                List.of(),
+                List.of(),
+                Ast.TypeRef.simple("void"),
+                List.of(),
+                List.of(
+                        new Ast.ExprStmt(new Ast.MemberExpr(new Ast.NameExpr("value"), "is")),
+                        new Ast.ReturnStmt(null)));
+
+        Ast.Program memberProgram = new Ast.Program(List.of(
+                new Ast.ModuleDecl("m", List.of(memberUse))));
+        assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(memberProgram));
+
+        Ast.TypeAliasDecl alias = new Ast.TypeAliasDecl(
+                "Alias",
+                List.of(),
+                Ast.TypeRef.simple("as"));
+        Ast.Program typeProgram = new Ast.Program(List.of(
+                new Ast.ModuleDecl("m", List.of(alias))));
+        assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(typeProgram));
     }
 
     @Test
