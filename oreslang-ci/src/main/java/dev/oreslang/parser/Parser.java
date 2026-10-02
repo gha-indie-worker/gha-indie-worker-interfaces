@@ -362,6 +362,11 @@ public final class Parser {
             else if (match(ASYNC)) async = true;
             else if (match(STATIC)) isStatic = true;
             else if (match(ABSTRACT)) isAbstract = true;
+            else if (check(ACTOR) && (checkNext(LPAREN) || checkNext(LT) || checkNext(COLON) || checkNext(EQUAL))) {
+                // In a name position, leave the token unconsumed so consume(IDENT, ...)
+                // produces the canonical reserved-keyword diagnostic.
+                progress = false;
+            }
             else if (match(ACTOR)) {
                 if (actor) throw error(previous(), "duplicate actor modifier");
                 actor = true;
