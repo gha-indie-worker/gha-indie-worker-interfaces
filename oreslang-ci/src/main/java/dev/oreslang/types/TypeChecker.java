@@ -312,7 +312,7 @@ public final class TypeChecker {
         for (Ast.FieldDecl field : klass.fields()) {
             Type fieldType = resolve(field.type(), classGenerics, self);
             if (field.initializer() != null) {
-                Type actual = typeOf(field.initializer(), new Env(null), classGenerics, self);
+                Type actual = typeOfWithExpected(field.initializer(), fieldType, new Env(null), classGenerics, self);
                 requireAssignable(actual, fieldType, "field initializer " + klass.name() + "." + field.name());
             }
             if (field.bindingKind() == Ast.BindingKind.CONST && field.initializer() != null && !constant(field.initializer())) {
@@ -362,8 +362,11 @@ public final class TypeChecker {
 
     private void checkModuleBinding(Ast.FieldDecl field) {
         if (field.initializer() == null) throw new IllegalArgumentException("module binding '" + field.name() + "' requires an initializer");
-        Type actual = typeOf(field.initializer(), new Env(null), Set.of(), null);
-        if (field.type() != null) requireAssignable(actual, resolve(field.type(), Set.of(), null), "initializer for " + field.name());
+        Type declared = field.type() == null ? null : resolve(field.type(), Set.of(), null);
+        Type actual = declared == null
+                ? typeOf(field.initializer(), new Env(null), Set.of(), null)
+                : typeOfWithExpected(field.initializer(), declared, new Env(null), Set.of(), null);
+        if (declared != null) requireAssignable(actual, declared, "initializer for " + field.name());
         if (field.bindingKind() == Ast.BindingKind.CONST && !constant(field.initializer())) {
             throw new IllegalArgumentException("const '" + field.name() + "' needs a compile-time constant initializer");
         }
@@ -381,10 +384,9 @@ public final class TypeChecker {
             if (recursiveLambda && declaredAhead instanceof Function) {
                 env.define(binding.name(), declaredAhead, binding.kind());
             }
-            if (binding.initializer() instanceof Ast.LambdaExpr lambda && declaredAhead instanceof Function expectedFunction) {
-                validateLambdaAgainstExpected(lambda, expectedFunction, env, generics, self);
-            }
-            Type actual = typeOf(binding.initializer(), env, generics, self);
+            Type actual = declaredAhead == null
+                    ? typeOf(binding.initializer(), env, generics, self)
+                    : typeOfWithExpected(binding.initializer(), declaredAhead, env, generics, self);
             Type declared = declaredAhead == null ? actual : declaredAhead;
             requireAssignable(actual, declared, "initializer for " + binding.name());
             if (binding.kind() == Ast.BindingKind.CONST && !constant(binding.initializer())) {
@@ -408,10 +410,9 @@ public final class TypeChecker {
             return;
         }
         if (stmt instanceof Ast.ReturnStmt ret) {
-            if (ret.value() instanceof Ast.LambdaExpr lambda && expectedReturn instanceof Function expectedFunction) {
-                validateLambdaAgainstExpected(lambda, expectedFunction, env, generics, self);
-            }
-            Type actual = ret.value() == null ? Primitive.VOID : typeOf(ret.value(), env, generics, self);
+            Type actual = ret.value() == null
+                    ? Primitive.VOID
+                    : typeOfWithExpected(ret.value(), expectedReturn, env, generics, self);
             requireAssignable(actual, expectedReturn, "return value");
             return;
         }
@@ -509,7 +510,7 @@ public final class TypeChecker {
                 else throw new IllegalArgumentException("indexed assignment requires an array/list or tuple");
                 where = "index";
             } else throw new IllegalArgumentException("unsupported assignment target");
-            Type value = typeOf(assignment.value(), env, generics, self);
+            Type value = typeOfWithExpected(assignment.value(), targetType, env, generics, self);
             requireAssignable(value, targetType, "assignment to " + where);
             return targetType;
         }
@@ -567,8 +568,8 @@ public final class TypeChecker {
                     fnGenerics.addAll(fn.genericParameters());
                     for (int i = 0; i < call.arguments().size(); i++) {
                         Type expected = resolveParam(fn.parameters().get(i), fnGenerics, null);
-                        validateLambdaArgument(call.arguments().get(i), expected, env, generics, self);
-                        requireAssignable(typeOf(call.arguments().get(i), env, generics, self), expected, "argument " + (i + 1));
+                        Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
+                        requireAssignable(actual, expected, "argument " + (i + 1));
                     }
                     return resolve(fn.returnType(), fnGenerics, null);
                 }
@@ -581,8 +582,8 @@ public final class TypeChecker {
                         methodGenerics.addAll(method.genericParameters());
                         for (int i = 0; i < call.arguments().size(); i++) {
                             Type expected = resolveParam(method.parameters().get(i), methodGenerics, named);
-                            validateLambdaArgument(call.arguments().get(i), expected, env, generics, self);
-                            requireAssignable(typeOf(call.arguments().get(i), env, generics, self), expected, "argument " + (i + 1));
+                            Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
+                            requireAssignable(actual, expected, "argument " + (i + 1));
                         }
                         return resolve(method.returnType(), methodGenerics, named);
                     }
@@ -592,8 +593,9 @@ public final class TypeChecker {
             if (!(callee instanceof Function fn)) return Unknown.INSTANCE;
             if (fn.parameters().size() != call.arguments().size()) throw new IllegalArgumentException("call arity mismatch");
             for (int i = 0; i < fn.parameters().size(); i++) {
-                validateLambdaArgument(call.arguments().get(i), fn.parameters().get(i), env, generics, self);
-                requireAssignable(typeOf(call.arguments().get(i), env, generics, self), fn.parameters().get(i), "argument " + (i + 1));
+                Type expected = fn.parameters().get(i);
+                Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
+                requireAssignable(actual, expected, "argument " + (i + 1));
             }
             return fn.result();
         }
@@ -800,10 +802,27 @@ public final class TypeChecker {
         return LambdaReturnSummary.of(commonType(left.type(), right.type()));
     }
 
-    private void validateLambdaArgument(Ast.Expr argument, Type expected, Env env, Set<String> generics, Type self) {
-        if (argument instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
+    private Type typeOfWithExpected(
+            Ast.Expr expression,
+            Type expected,
+            Env env,
+            Set<String> generics,
+            Type self) {
+        if (expression instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
             validateLambdaAgainstExpected(lambda, fn, env, generics, self);
+            return fn;
         }
+
+        if (expression instanceof Ast.ConditionalExpr conditional && expected instanceof Function) {
+            requireAssignable(typeOf(conditional.condition(), env, generics, self), Primitive.BOOL, "ternary condition");
+            Type whenTrue = typeOfWithExpected(conditional.whenTrue(), expected, env, generics, self);
+            Type whenFalse = typeOfWithExpected(conditional.whenFalse(), expected, env, generics, self);
+            requireAssignable(whenTrue, expected, "ternary true branch");
+            requireAssignable(whenFalse, expected, "ternary false branch");
+            return expected;
+        }
+
+        return typeOf(expression, env, generics, self);
     }
 
     private void validateLambdaAgainstExpected(Ast.LambdaExpr lambda, Function expected, Env parent, Set<String> generics, Type self) {
