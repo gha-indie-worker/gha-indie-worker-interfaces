@@ -18,15 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Set up GraalVM
-        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
-        with:
-          version: '25.3'
-          java-version: '25'
-          distribution: 'graalvm'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          cache: maven
-
-      - name: Verify Oreslang mirror
-        working-directory: oreslang-ci
-        run: mvn -B -ntp verify
+      - name: Verify Oreslang mirror in JDK 21 Maven container
+        run: |
+          docker run --rm \
+            -v "$PWD/oreslang-ci:/work" \
+            -w /work \
+            maven:3.9.11-eclipse-temurin-21 \
+            mvn -B -ntp verify
