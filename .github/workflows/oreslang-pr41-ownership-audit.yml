@@ -1,0 +1,69 @@
+name: oreslang-pr41-ownership-audit
+
+on:
+  push:
+    branches:
+      - ci/oreslang-pr41-ownership-audit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact Oreslang ownership audit mirror
+        shell: bash
+        run: |
+          set +e
+          docker run --rm \
+            -v "$PWD/oreslang-ci:/work" \
+            -w /work \
+            maven:3.9.11-eclipse-temurin-21 \
+            mvn -B -ntp verify > oreslang-verify.log 2>&1
+          status=$?
+          echo "$status" > oreslang-verify.status
+          tail -n 300 oreslang-verify.log || true
+          exit 0
+      - name: Run current source examples
+        if: always()
+        shell: bash
+        run: |
+          if [ "$(cat oreslang-verify.status)" != "0" ]; then
+            echo 'Skipping examples because verify failed.' > oreslang-examples.log
+            exit 0
+          fi
+          set +e
+          docker run --rm \
+            -v "$PWD/oreslang-ci:/work" \
+            -w /work \
+            maven:3.9.11-eclipse-temurin-21 \
+            bash -lc '
+              set -euo pipefail
+              mvn -B -ntp -DskipTests compile exec:java -Dexec.args="examples/showcase.ores"
+              mvn -B -ntp -DskipTests compile exec:java -Dexec.args="examples/together.ores"
+            ' > oreslang-examples.log 2>&1
+          status=$?
+          echo "$status" > oreslang-examples.status
+          tail -n 200 oreslang-examples.log || true
+          exit 0
+      - name: Upload Oreslang validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oreslang-pr41-validation
+          path: |
+            oreslang-verify.log
+            oreslang-verify.status
+            oreslang-examples.log
+            oreslang-examples.status
+          if-no-files-found: ignore
+      - name: Preserve validation result
+        shell: bash
+        run: |
+          verify_status="$(cat oreslang-verify.status)"
+          example_status="0"
+          if [ -f oreslang-examples.status ]; then example_status="$(cat oreslang-examples.status)"; fi
+          if [ "$verify_status" != "0" ] || [ "$example_status" != "0" ]; then exit 1; fi
