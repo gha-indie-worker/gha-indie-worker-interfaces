@@ -1,0 +1,14 @@
+namespace defer_lifo_demo;
+
+pub routine main() => void {
+  defer || -> {
+    stdio.println("first defer");
+  };
+
+  defer || -> {
+    stdio.println("second defer");
+  };
+
+  stdio.println("body");
+  return;
+}
