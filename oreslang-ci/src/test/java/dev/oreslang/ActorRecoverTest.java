@@ -244,6 +244,51 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void actorSelfCanSendAndStopWithoutOuterHandleCapture() throws Exception {
+        String output = run("""
+                pub routine main() => void {
+                  val worker = actor |int value| -> {
+                    stdio.stdout.write(value);
+
+                    if value < 2; do
+                      self.send(value + 1);
+                    else
+                      self.stop();
+                    fi
+                  };
+
+                  worker.send(0);
+                  worker.join();
+                }
+                """);
+
+        assertEquals("012", output);
+    }
+
+    @Test
+    void actorSelfJoinFailsRecoverablyInsteadOfDeadlocking() throws Exception {
+        String output = run("""
+                pub routine main() => void {
+                  val worker = actor |String msg| -> {
+                    recover |err| -> {
+                      stdio.stdout.write("R");
+                      self.stop();
+                      return;
+                    };
+
+                    self.join();
+                  };
+
+                  worker.send("go");
+                  worker.join();
+                  stdio.stdout.write(worker.failed);
+                }
+                """);
+
+        assertEquals("Rfalse", output);
+    }
+
+    @Test
     void recoveredActorContinuesAndStopsWithoutFailure() throws Exception {
         String output = run("""
                 pub routine main() => void {
