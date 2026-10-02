@@ -367,6 +367,48 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void actorTaskHandleCanCrossAnotherActorMailbox() throws Exception {
+        String output = run("""
+                actor fnc work() => void {
+                  stdio.stdout.write("W");
+                }
+
+                pub routine main() => void {
+                  val task = work();
+
+                  val observer = actor |ActorTask observed| -> {
+                    observed.join();
+                    stdio.stdout.write(observed.failed);
+                  };
+
+                  observer.send(task);
+                  observer.stop();
+                  observer.join();
+                }
+                """);
+
+        assertEquals("Wfalse", output);
+    }
+
+    @Test
+    void actorModifierIsRejectedOnNonCallableDeclarations() {
+        assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
+                actor val value = 1;
+                """));
+
+        assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
+                actor interface Bad {
+                  fnc x() => void;
+                }
+                """));
+
+        assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
+                actor define class Bad
+                end
+                """));
+    }
+
+    @Test
     void actorCallableMustDeclareVoid() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
                 TypeChecker.check(Parser.parse("""
