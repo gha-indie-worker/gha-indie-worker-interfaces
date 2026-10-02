@@ -42,7 +42,7 @@ public final class Parser {
             if (match(DEFINE)) {
                 boolean afterDefineAbstract = match(ABSTRACT);
                 if (match(MODULE)) {
-                    if (modifiers.visibility != Ast.Visibility.PRIVATE || modifiers.async || modifiers.isStatic || modifiers.isAbstract) {
+                    if (modifiers.visibility != Ast.Visibility.PRIVATE || modifiers.async || modifiers.isStatic || modifiers.isAbstract || modifiers.actor) {
                         throw error(previous(), "modules do not accept function/class modifiers");
                     }
                     modules.add(parseModule(annotations));
@@ -153,8 +153,14 @@ public final class Parser {
         consume(RPAREN, "expected ')' after parameters");
         Ast.TypeRef returnType = parseReturnType(annotations);
         List<Ast.Stmt> body = parseBlock();
+        List<Ast.Annotation> effectiveAnnotations = new ArrayList<>(annotations);
+        if (modifiers.actor) {
+            effectiveAnnotations.add(new Ast.Annotation(
+                    modifiers.actorIsolate ? "__ActorIsolate" : "__Actor",
+                    List.of()));
+        }
         return new Ast.FunctionDecl(name, kind, modifiers.visibility, modifiers.async, generics, params,
-                returnType, annotations, body);
+                returnType, effectiveAnnotations, body);
     }
 
     private Ast.ClassDecl parseClass(boolean isAbstract) {
@@ -168,6 +174,9 @@ public final class Parser {
         while (!check(END) && !check(EOF)) {
             List<Ast.Annotation> annotations = parseAnnotations();
             Modifiers mods = parseModifiers();
+            if (mods.actor) {
+                throw error(peek(), "actor modifier is only valid on top-level/module fnc or routine declarations");
+            }
             if (isBindingKind(peek().type())) {
                 if (mods.isStatic) throw error(peek(), "static data members are not implemented yet; static class functions use 'static fnc'");
                 fields.add(parseField(mods.visibility));
@@ -331,6 +340,8 @@ public final class Parser {
         boolean async = false;
         boolean isStatic = false;
         boolean isAbstract = false;
+        boolean actor = false;
+        boolean actorIsolate = false;
         boolean progress;
         do {
             progress = true;
@@ -339,9 +350,14 @@ public final class Parser {
             else if (match(ASYNC)) async = true;
             else if (match(STATIC)) isStatic = true;
             else if (match(ABSTRACT)) isAbstract = true;
+            else if (match(ACTOR)) {
+                if (actor) throw error(previous(), "duplicate actor modifier");
+                actor = true;
+                actorIsolate = match(ISOLATE);
+            }
             else progress = false;
         } while (progress);
-        return new Modifiers(visibility, async, isStatic, isAbstract);
+        return new Modifiers(visibility, async, isStatic, isAbstract, actor, actorIsolate);
     }
 
     private Ast.TypeRef parseReturnType(List<Ast.Annotation> annotations) {
@@ -980,5 +996,11 @@ public final class Parser {
         return new IllegalArgumentException("Oreslang parse error at " + token.line() + ":" + token.column() + ": " + message);
     }
 
-    private record Modifiers(Ast.Visibility visibility, boolean async, boolean isStatic, boolean isAbstract) { }
+    private record Modifiers(
+            Ast.Visibility visibility,
+            boolean async,
+            boolean isStatic,
+            boolean isAbstract,
+            boolean actor,
+            boolean actorIsolate) { }
 }
