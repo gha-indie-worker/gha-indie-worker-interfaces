@@ -160,7 +160,9 @@ final class ActorRuntimeTest {
 
             var ref = runtime.<String>spawn(() -> (message, context) -> {
                 started.countDown();
-                assertTrue(release.await(2, TimeUnit.SECONDS));
+                if (!release.await(2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("test release timeout");
+                }
             });
 
             ref.send("accepted");
@@ -172,6 +174,7 @@ final class ActorRuntimeTest {
             release.countDown();
             ref.join();
             assertFalse(ref.isAlive());
+            assertFalse(ref.failed());
         }
     }
 
@@ -193,7 +196,9 @@ final class ActorRuntimeTest {
             var ref = runtime.<String>spawn(oneMessageMailbox, () -> (message, context) -> {
                 if (message.equals("one")) {
                     firstStarted.countDown();
-                    assertTrue(releaseFirst.await(2, TimeUnit.SECONDS));
+                    if (!releaseFirst.await(2, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test release timeout");
+                    }
                 }
                 delivered.countDown();
             });
