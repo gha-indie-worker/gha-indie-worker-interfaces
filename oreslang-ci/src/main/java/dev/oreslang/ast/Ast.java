@@ -177,9 +177,10 @@ public final class Ast {
     }
 
     public enum BindingKind { CONST, VAL, LET }
+    public enum ActorMode { SHARED, ISOLATE }
 
     public sealed interface Stmt permits BindingStmt, DestructureStmt, ReturnStmt, ExprStmt, DeferStmt,
-            BreakStmt, ContinueStmt, IfStmt, TryStmt, ForOfStmt, ForStmt { }
+            RecoverStmt, PanicStmt, BreakStmt, ContinueStmt, IfStmt, TryStmt, ForOfStmt, ForStmt { }
 
     public record BindingStmt(BindingKind kind, TypeRef declaredType, String name, Expr initializer) implements Stmt { }
     public record DestructureBinding(BindingKind kind, String name) { }
@@ -196,6 +197,13 @@ public final class Ast {
      * callable's LIFO defer stack and invoked when that callable exits.
      */
     public record DeferStmt(Expr expression) implements Stmt { }
+    /**
+     * Evaluates the handler immediately and registers the resulting arity-1
+     * callable on the current callable's recovery frame. It is invoked only
+     * while a failure is unwinding out of that callable.
+     */
+    public record RecoverStmt(Expr handler) implements Stmt { }
+    public record PanicStmt(Expr value) implements Stmt { }
     public record BreakStmt() implements Stmt { }
     public record ContinueStmt() implements Stmt { }
 
@@ -227,7 +235,7 @@ public final class Ast {
     }
 
     public sealed interface Expr permits LiteralExpr, NameExpr, BinaryExpr, UnaryExpr, AssignExpr, ConditionalExpr,
-            CallExpr, MemberExpr, IndexExpr, NewExpr, AwaitExpr, ListExpr, TupleExpr, ObjectExpr, LambdaExpr { }
+            CallExpr, MemberExpr, IndexExpr, NewExpr, AwaitExpr, ListExpr, TupleExpr, ObjectExpr, LambdaExpr, ActorExpr { }
 
     public record LiteralExpr(Object value) implements Expr { }
     public record Imaginary(double coefficient) { }
@@ -264,10 +272,26 @@ public final class Ast {
         public ObjectExpr { fields = List.copyOf(fields); }
     }
 
-    public record LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody) implements Expr {
+    public record LambdaExpr(
+            List<Param> parameters,
+            Expr expressionBody,
+            List<Stmt> blockBody,
+            TypeRef returnType) implements Expr {
         public LambdaExpr {
             parameters = List.copyOf(parameters);
             blockBody = blockBody == null ? null : List.copyOf(blockBody);
+            returnType = returnType == null ? TypeRef.inferred() : returnType;
+        }
+
+        public LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody) {
+            this(parameters, expressionBody, blockBody, TypeRef.inferred());
+        }
+
+        public boolean hasExplicitReturnType() {
+            return !returnType.name().equals("$infer$");
         }
     }
+
+    /** A first-class mailbox actor. SHARED is the default; ISOLATE requests the stronger isolation backend. */
+    public record ActorExpr(ActorMode mode, LambdaExpr behavior) implements Expr { }
 }

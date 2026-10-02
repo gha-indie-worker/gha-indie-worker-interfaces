@@ -40,9 +40,12 @@ public final class Parser {
             Modifiers modifiers = parseModifiers();
 
             if (match(DEFINE)) {
+                if (modifiers.actor) {
+                    throw error(previous(), "actor modifier is only valid on fnc or routine declarations");
+                }
                 boolean afterDefineAbstract = match(ABSTRACT);
                 if (match(MODULE)) {
-                    if (modifiers.visibility != Ast.Visibility.PRIVATE || modifiers.async || modifiers.isStatic || modifiers.isAbstract) {
+                    if (modifiers.visibility != Ast.Visibility.PRIVATE || modifiers.async || modifiers.isStatic || modifiers.isAbstract || modifiers.actor) {
                         throw error(previous(), "modules do not accept function/class modifiers");
                     }
                     modules.add(parseModule(annotations));
@@ -122,6 +125,12 @@ public final class Parser {
         Modifiers modifiers = parseModifiers();
 
         if (match(DEFINE)) {
+            if (modifiers.explicitVoid) {
+                throw error(previous(), "'void' return modifier applies only to callable declarations");
+            }
+            if (modifiers.actor) {
+                throw error(previous(), "actor modifier is only valid on fnc or routine declarations");
+            }
             boolean afterDefineAbstract = match(ABSTRACT);
             if (match(CLASS)) return parseClass(modifiers.isAbstract || afterDefineAbstract);
             if (match(INTERFACE)) return parseInterface(modifiers.visibility);
@@ -136,6 +145,12 @@ public final class Parser {
     private Ast.Decl parseDeclarationAfterModifiers(List<Ast.Annotation> annotations, Modifiers modifiers) {
         if (match(FNC)) return parseFunction(annotations, modifiers, Ast.CallableKind.FNC);
         if (match(ROUTINE)) return parseFunction(annotations, modifiers, Ast.CallableKind.ROUTINE);
+        if (modifiers.explicitVoid) {
+            throw error(peek(), "'void' return modifier applies only to fnc or routine declarations");
+        }
+        if (modifiers.actor) {
+            throw error(peek(), "actor modifier is only valid on fnc or routine declarations");
+        }
         if (match(INTERFACE)) return parseInterface(modifiers.visibility);
         if (match(TYPE)) return parseTypeAlias();
         if (isBindingKind(peek().type())) return parseModuleBinding(modifiers.visibility);
@@ -151,10 +166,16 @@ public final class Parser {
         java.util.Set<String> structuralNames = structuralAnnotationNames(annotations);
         List<Ast.Param> params = applyStructuralAnnotations(parseParametersUntil(RPAREN, structuralNames), annotations);
         consume(RPAREN, "expected ')' after parameters");
-        Ast.TypeRef returnType = parseReturnType(annotations);
+        Ast.TypeRef returnType = parseReturnType(annotations, modifiers.explicitVoid);
         List<Ast.Stmt> body = parseBlock();
+        List<Ast.Annotation> effectiveAnnotations = new ArrayList<>(annotations);
+        if (modifiers.actor) {
+            effectiveAnnotations.add(new Ast.Annotation(
+                    modifiers.actorIsolate ? "__ActorIsolate" : "__Actor",
+                    List.of()));
+        }
         return new Ast.FunctionDecl(name, kind, modifiers.visibility, modifiers.async, generics, params,
-                returnType, annotations, body);
+                returnType, effectiveAnnotations, body);
     }
 
     private Ast.ClassDecl parseClass(boolean isAbstract) {
@@ -168,6 +189,12 @@ public final class Parser {
         while (!check(END) && !check(EOF)) {
             List<Ast.Annotation> annotations = parseAnnotations();
             Modifiers mods = parseModifiers();
+            if (mods.actor) {
+                throw error(peek(), "actor modifier is only valid on top-level/module fnc or routine declarations");
+            }
+            if (mods.explicitVoid && isBindingKind(peek().type())) {
+                throw error(peek(), "'void' return modifier cannot be used on data fields");
+            }
             if (isBindingKind(peek().type())) {
                 if (mods.isStatic) throw error(peek(), "static data members are not implemented yet; static class functions use 'static fnc'");
                 fields.add(parseField(mods.visibility));
@@ -194,8 +221,11 @@ public final class Parser {
 
         List<Ast.InterfaceMember> members = new ArrayList<>();
         while (!check(terminator) && !check(EOF)) {
-            parseAnnotations();
-            parseModifiers();
+            List<Ast.Annotation> memberAnnotations = parseAnnotations();
+            Modifiers memberModifiers = parseModifiers();
+            if (memberModifiers.actor) {
+                throw error(peek(), "actor modifier is not valid on interface members");
+            }
 
             if (match(FNC)) {
                 String memberName = consume(IDENT, "expected interface function name").lexeme();
@@ -203,10 +233,14 @@ public final class Parser {
                 consume(LPAREN, "expected '(' after interface function name");
                 List<Ast.Param> params = parseParametersUntil(RPAREN);
                 consume(RPAREN, "expected ')' after interface parameters");
-                Ast.TypeRef returns = match(FAT_ARROW) ? parseTypeRef() : Ast.TypeRef.simple("void");
+                Ast.TypeRef returns = parseReturnType(memberAnnotations, memberModifiers.explicitVoid);
                 consumeMemberTerminator(terminator, "interface function signature should end with ';'");
                 members.add(new Ast.InterfaceFunctionDecl(memberName, memberGenerics, params, returns));
                 continue;
+            }
+
+            if (memberModifiers.explicitVoid) {
+                throw error(peek(), "'void' return modifier cannot be used on interface data fields");
             }
 
             if (check(IDENT) && checkNext(COLON)) {
@@ -278,7 +312,7 @@ public final class Parser {
             consume(RPAREN, "expected ')' after method parameters");
         }
 
-        Ast.TypeRef returnType = parseReturnType(annotations);
+        Ast.TypeRef returnType = parseReturnType(annotations, mods.explicitVoid);
         List<Ast.Stmt> body;
         if (mods.isAbstract) {
             consumeStatementTerminator("abstract method should end with ';'");
@@ -331,6 +365,10 @@ public final class Parser {
         boolean async = false;
         boolean isStatic = false;
         boolean isAbstract = false;
+        boolean actor = false;
+        boolean actorIsolate = false;
+        boolean explicitVoid = false;
+        boolean voidSeen = false;
         boolean progress;
         do {
             progress = true;
@@ -339,12 +377,31 @@ public final class Parser {
             else if (match(ASYNC)) async = true;
             else if (match(STATIC)) isStatic = true;
             else if (match(ABSTRACT)) isAbstract = true;
+            else if (match(VOID)) {
+                if (voidSeen) throw error(previous(), "duplicate 'void' return modifier");
+                voidSeen = true;
+                explicitVoid = true;
+            }
+            else if (check(ACTOR) && (checkNext(LPAREN) || checkNext(LT) || checkNext(COLON) || checkNext(EQUAL))) {
+                // In a name position, leave the token unconsumed so consume(IDENT, ...)
+                // produces the canonical reserved-keyword diagnostic.
+                progress = false;
+            }
+            else if (match(ACTOR)) {
+                if (actor) throw error(previous(), "duplicate actor modifier");
+                actor = true;
+                actorIsolate = match(ISOLATE);
+            }
             else progress = false;
         } while (progress);
-        return new Modifiers(visibility, async, isStatic, isAbstract);
+        return new Modifiers(visibility, async, isStatic, isAbstract, actor, actorIsolate, explicitVoid);
     }
 
     private Ast.TypeRef parseReturnType(List<Ast.Annotation> annotations) {
+        return parseReturnType(annotations, false);
+    }
+
+    private Ast.TypeRef parseReturnType(List<Ast.Annotation> annotations, boolean explicitVoid) {
         Ast.TypeRef annotated = null;
         for (Ast.Annotation annotation : annotations) {
             if (annotation.name().equals("Ret")) {
@@ -353,10 +410,20 @@ public final class Parser {
             }
         }
         Ast.TypeRef arrow = match(FAT_ARROW) ? parseTypeRef() : null;
+        Ast.TypeRef prefixed = explicitVoid ? Ast.TypeRef.simple("void") : null;
         if (annotated != null && arrow != null && !sameType(annotated, arrow)) {
             throw error(previous(), "@Ret type and => return type disagree");
         }
-        return arrow != null ? arrow : annotated != null ? annotated : Ast.TypeRef.simple("void");
+        if (prefixed != null && annotated != null && !sameType(prefixed, annotated)) {
+            throw error(previous(), "'void' return modifier and @Ret type disagree");
+        }
+        if (prefixed != null && arrow != null && !sameType(prefixed, arrow)) {
+            throw error(previous(), "'void' return modifier and => return type disagree");
+        }
+        return arrow != null ? arrow
+                : annotated != null ? annotated
+                : prefixed != null ? prefixed
+                : Ast.TypeRef.simple("void");
     }
 
     private boolean sameType(Ast.TypeRef a, Ast.TypeRef b) {
@@ -539,6 +606,19 @@ public final class Parser {
             Ast.Expr expression = parseExpression();
             consumeStatementTerminator("defer statement should end with ';'");
             return new Ast.DeferStmt(expression);
+        }
+        if (match(RECOVER)) {
+            Ast.Expr handler = parseExpression();
+            consumeStatementTerminator("recover statement should end with ';'");
+            return new Ast.RecoverStmt(handler);
+        }
+        if (match(PANIC)) {
+            if (check(SEMICOLON) || isSafeStatementBoundary()) {
+                throw error(peek(), "panic requires a value");
+            }
+            Ast.Expr value = parseExpression();
+            consumeStatementTerminator("panic statement should end with ';'");
+            return new Ast.PanicStmt(value);
         }
         if (match(BREAK)) {
             consumeStatementTerminator("break statement should end with ';'");
@@ -798,6 +878,14 @@ public final class Parser {
         if (match(NULL)) throw error(previous(), "standalone null values are forbidden; use Option<T>");
         if (match(SELF)) return new Ast.NameExpr("self");
         if (match(IDENT)) return new Ast.NameExpr(previous().lexeme());
+        if (match(ACTOR)) {
+            Ast.ActorMode mode = match(ISOLATE) ? Ast.ActorMode.ISOLATE : Ast.ActorMode.SHARED;
+            Ast.LambdaExpr behavior;
+            if (check(PIPE)) behavior = parsePipeLambda();
+            else if (check(LPAREN) && looksLikeLambda()) behavior = parseLambda();
+            else throw error(peek(), "actor requires a lambda behavior, e.g. actor |Message msg| -> { ... }");
+            return new Ast.ActorExpr(mode, behavior);
+        }
         if (match(NEW)) {
             Ast.TypeRef type = parseTypeRef();
             consume(LPAREN, "expected '(' after new type");
@@ -855,8 +943,9 @@ public final class Parser {
         List<Ast.Param> params = parseParametersUntil(RPAREN);
         consume(RPAREN, "expected ')' after lambda parameters");
         consume(ARROW, "expected '->' after lambda parameters");
-        if (!check(LBRACE)) throw error(peek(), "lambdas always require a block body; use '-> { ... }'");
-        return new Ast.LambdaExpr(params, null, parseBlock());
+        Ast.TypeRef returnType = check(LBRACE) ? Ast.TypeRef.inferred() : parseTypeRef();
+        if (!check(LBRACE)) throw error(peek(), "lambdas always require a block body; use '-> { ... }' or '-> Type { ... }'");
+        return new Ast.LambdaExpr(params, null, parseBlock(), returnType);
     }
 
     private Ast.LambdaExpr parsePipeLambda() {
@@ -877,8 +966,9 @@ public final class Parser {
         }
         consume(PIPE, "expected closing '|' after lambda parameters");
         consume(ARROW, "lambdas use the slim arrow '->'");
-        if (!check(LBRACE)) throw error(peek(), "lambdas always require a block body; use '|args| -> { ... }'");
-        return new Ast.LambdaExpr(params, null, parseBlock());
+        Ast.TypeRef returnType = check(LBRACE) ? Ast.TypeRef.inferred() : parseTypeRef();
+        if (!check(LBRACE)) throw error(peek(), "lambdas always require a block body; use '|args| -> { ... }' or '|args| -> Type { ... }'");
+        return new Ast.LambdaExpr(params, null, parseBlock(), returnType);
     }
 
     private boolean looksLikeLambda() {
@@ -941,7 +1031,8 @@ public final class Parser {
     }
 
     private boolean isReservedIdentifierKeyword(Token.Type type) {
-        return type == AS || type == IS || type == OF;
+        return type == AS || type == IS || type == OF
+                || type == ACTOR || type == ISOLATE || type == RECOVER || type == PANIC;
     }
 
     private boolean check(Token.Type type) { return peek().type() == type; }
@@ -958,5 +1049,12 @@ public final class Parser {
         return new IllegalArgumentException("Oreslang parse error at " + token.line() + ":" + token.column() + ": " + message);
     }
 
-    private record Modifiers(Ast.Visibility visibility, boolean async, boolean isStatic, boolean isAbstract) { }
+    private record Modifiers(
+            Ast.Visibility visibility,
+            boolean async,
+            boolean isStatic,
+            boolean isAbstract,
+            boolean actor,
+            boolean actorIsolate,
+            boolean explicitVoid) { }
 }

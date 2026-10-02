@@ -13,7 +13,8 @@ import java.util.Set;
  * Java tooling, incremental compiler caches, or future serialized IR readers.
  */
 final class ReservedIdentifierValidator {
-    private static final Set<String> RESERVED = Set.of("of", "is", "as");
+    private static final Set<String> RESERVED = Set.of(
+            "of", "is", "as", "actor", "isolate", "recover", "panic");
 
     private ReservedIdentifierValidator() { }
 
@@ -136,6 +137,10 @@ final class ReservedIdentifierValidator {
             expression(expr.expression());
         } else if (stmt instanceof Ast.DeferStmt defer) {
             expression(defer.expression());
+        } else if (stmt instanceof Ast.RecoverStmt recover) {
+            expression(recover.handler());
+        } else if (stmt instanceof Ast.PanicStmt panic) {
+            expression(panic.value());
         } else if (stmt instanceof Ast.IfStmt conditional) {
             for (Ast.IfBranch branch : conditional.branches()) {
                 expression(branch.condition());
@@ -203,6 +208,10 @@ final class ReservedIdentifierValidator {
             parameters(lambda.parameters());
             if (lambda.expressionBody() != null) expression(lambda.expressionBody());
             statements(lambda.blockBody());
+        } else if (expr instanceof Ast.ActorExpr actor) {
+            parameters(actor.behavior().parameters());
+            if (actor.behavior().expressionBody() != null) expression(actor.behavior().expressionBody());
+            statements(actor.behavior().blockBody());
         }
     }
 

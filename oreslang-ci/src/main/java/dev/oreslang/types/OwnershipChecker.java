@@ -147,6 +147,17 @@ public final class OwnershipChecker {
             checkExpr(defer.expression(), scope, true);
             return;
         }
+        if (stmt instanceof Ast.RecoverStmt recover) {
+            // Recovery handlers are retained by the current callable frame until
+            // failure unwind completes or the callable returns normally.
+            checkExpr(recover.handler(), scope, true);
+            return;
+        }
+        if (stmt instanceof Ast.PanicStmt panic) {
+            // The panic payload crosses the current callable boundary by value.
+            checkExpr(panic.value(), scope, true);
+            return;
+        }
         if (stmt instanceof Ast.IfStmt conditional) {
             Map<VarState, StateSnapshot> base = stateSnapshot(scope);
             List<Map<VarState, StateSnapshot>> exits = new ArrayList<>();
@@ -320,15 +331,25 @@ public final class OwnershipChecker {
             for (Ast.ObjectField field : object.fields()) checkExpr(field.value(), scope, true);
             return new ValueInfo(Ast.TypeRef.simple("obj"), ValueKind.MOVE_ONLY, null);
         }
+        if (expr instanceof Ast.ActorExpr actor) return checkActor(actor, scope);
         if (expr instanceof Ast.LambdaExpr lambda) return checkLambda(lambda, scope, null);
         return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
     }
 
     private ValueInfo checkCall(Ast.CallExpr call, Scope scope) {
+        if (isReadOnlyBuiltinCall(call.callee())) {
+            checkExpr(call.callee(), scope, false);
+            for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, false);
+            return new ValueInfo(Ast.TypeRef.simple("void"), ValueKind.COPY, null);
+        }
+
         if (call.callee() instanceof Ast.NameExpr name) {
             Ast.FunctionDecl fn = findFunction(name.name());
             if (fn != null) {
                 checkArguments(call.arguments(), fn.parameters(), scope, "function " + fn.name());
+                if (isActorCallable(fn)) {
+                    return new ValueInfo(Ast.TypeRef.simple("ActorTask"), ValueKind.COPY, null);
+                }
                 return new ValueInfo(fn.returnType(), kindOfType(fn.returnType()), null);
             }
         }
@@ -346,6 +367,25 @@ public final class OwnershipChecker {
         checkExpr(call.callee(), scope, false);
         for (Ast.Expr arg : call.arguments()) checkExpr(arg, scope, true);
         return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
+    }
+
+    private boolean isReadOnlyBuiltinCall(Ast.Expr callee) {
+        String path = memberPath(callee);
+        return path != null && (
+                path.equals("print")
+                || path.equals("stdio.print")
+                || path.equals("stdio.println")
+                || path.equals("stdio.stdout.write")
+                || path.equals("stdio.stdout.println"));
+    }
+
+    private String memberPath(Ast.Expr expr) {
+        if (expr instanceof Ast.NameExpr name) return name.name();
+        if (expr instanceof Ast.MemberExpr member) {
+            String parent = memberPath(member.receiver());
+            return parent == null ? null : parent + "." + member.member();
+        }
+        return null;
     }
 
     private void checkArguments(List<Ast.Expr> arguments, List<Ast.Param> params, Scope scope, String callable) {
@@ -462,6 +502,33 @@ public final class OwnershipChecker {
         else owner.immutableBorrows++;
     }
 
+    private ValueInfo checkActor(Ast.ActorExpr actor, Scope outer) {
+        Ast.LambdaExpr behavior = actor.behavior();
+        CaptureSet captures = collectCaptures(behavior, outer, null);
+
+        if (actor.mode() == Ast.ActorMode.ISOLATE) {
+            for (Capture capture : captures.values.values()) {
+                VarState source = capture.source;
+                source.debugName = capture.name;
+                requireUsable(source, capture.name, capture.write);
+
+                if (capture.write || source.mutable || source.kind != ValueKind.COPY || source.type.isBorrow()) {
+                    throw error("isolate actor cannot capture mutable, borrowed, or move-only outer value '"
+                            + capture.name + "'; pass data through the mailbox instead");
+                }
+            }
+        }
+
+        checkLambda(behavior, outer, null);
+        Ast.TypeRef messageType = behavior.parameters().isEmpty()
+                ? Ast.TypeRef.inferred()
+                : behavior.parameters().getFirst().type();
+        return new ValueInfo(
+                new Ast.TypeRef("Actor", List.of(messageType), false),
+                ValueKind.COPY,
+                null);
+    }
+
     private ValueInfo checkLambda(Ast.LambdaExpr lambda, Scope outer, String recursiveBinding) {
         CaptureSet captures = collectCaptures(lambda, outer, recursiveBinding);
         Scope closure = new Scope(null);
@@ -516,6 +583,12 @@ public final class OwnershipChecker {
             } else if (stmt instanceof Ast.ExprStmt e) scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
             else if (stmt instanceof Ast.DeferStmt e) {
                 scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
+            }
+            else if (stmt instanceof Ast.RecoverStmt e) {
+                scanExpr(e.handler(), blockLocals, outer, recursiveBinding, captures, false);
+            }
+            else if (stmt instanceof Ast.PanicStmt e) {
+                scanExpr(e.value(), blockLocals, outer, recursiveBinding, captures, false);
             }
             else if (stmt instanceof Ast.IfStmt s) {
                 for (Ast.IfBranch b : s.branches()) {
@@ -575,6 +648,9 @@ public final class OwnershipChecker {
         else if (expr instanceof Ast.ListExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.TupleExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.ObjectExpr e) for (Ast.ObjectField field : e.fields()) scanExpr(field.value(), locals, outer, recursiveBinding, captures, false);
+        else if (expr instanceof Ast.ActorExpr) {
+            // Nested actor behavior performs its own capture analysis when checked.
+        }
         else if (expr instanceof Ast.LambdaExpr) {
             // Nested lambda performs its own capture analysis when checked.
         }
@@ -631,6 +707,11 @@ public final class OwnershipChecker {
         }
         seen.remove(klass);
         return null;
+    }
+
+    private boolean isActorCallable(Ast.FunctionDecl fn) {
+        return fn.annotations().stream().anyMatch(annotation ->
+                annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
     }
 
     private Ast.FunctionDecl findFunction(String name) {
@@ -721,7 +802,7 @@ public final class OwnershipChecker {
         return switch (type.name()) {
             case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
                     "f32","f64","float","decimal","complex64","complex128","complex",
-                    "bool","Bool","string","String","void" -> true;
+                    "bool","Bool","string","String","void","Actor","ActorTask" -> true;
             default -> false;
         };
     }

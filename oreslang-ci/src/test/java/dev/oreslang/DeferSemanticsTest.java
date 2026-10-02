@@ -30,6 +30,26 @@ final class DeferSemanticsTest {
     }
 
     @Test
+    void deferRunsOnExplicitReturn() throws Exception {
+        String output = run("""
+                fnc inner() => int {
+                  defer || -> {
+                    stdio.stdout.write("D");
+                  };
+                  stdio.stdout.write("R");
+                  return 7;
+                }
+
+                pub routine main() => void {
+                  stdio.stdout.write(inner());
+                  return;
+                }
+                """);
+
+        assertEquals("RD7", output);
+    }
+
+    @Test
     void nestedBlockDefersBelongToTheEnclosingCallable() throws Exception {
         String output = run("""
                 pub routine main() => void {
