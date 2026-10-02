@@ -99,12 +99,38 @@ public final class OresEvalRootNode extends RootNode {
                 if (fn.parameters().isEmpty() && args.size() == 1 && args.getFirst() instanceof Object[] array && array.length == 0) args = List.of();
                 else throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
             }
+
+            if (isActorCallable(fn)) {
+                ActorRuntime.ActorKind kind = isIsolateActorCallable(fn)
+                        ? ActorRuntime.ActorKind.ISOLATE
+                        : ActorRuntime.ActorKind.SHARED;
+                ActorRuntime.ActorRef<List<?>> ref = context.actors().spawn(kind, () -> (message, actorContext) -> {
+                    invokeFunctionBody(fn, message);
+                });
+                ref.send(new ArrayList<>(args));
+                ref.stop();
+                return new ActorTaskValue(ref);
+            }
+
+            return invokeFunctionBody(fn, args);
+        }
+
+        private Object invokeFunctionBody(Ast.FunctionDecl fn, List<?> args) {
             Env env = new Env(null);
             for (int i = 0; i < fn.parameters().size(); i++) {
                 Ast.Param param = fn.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
             return executeCallableBody(fn.body(), env);
+        }
+
+        private boolean isActorCallable(Ast.FunctionDecl fn) {
+            return fn.annotations().stream().anyMatch(annotation ->
+                    annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
+        }
+
+        private boolean isIsolateActorCallable(Ast.FunctionDecl fn) {
+            return fn.annotations().stream().anyMatch(annotation -> annotation.name().equals("__ActorIsolate"));
         }
 
         private Object callMethod(OresObject receiver, Ast.MethodDecl method, List<?> args) {
@@ -523,6 +549,25 @@ public final class OresEvalRootNode extends RootNode {
                     default -> throw new IllegalArgumentException("unknown process member " + name);
                 };
             }
+            if (receiver instanceof ActorTaskValue task) {
+                ActorRuntime.ActorRef<?> actor = task.ref();
+                return switch (name) {
+                    case "stop" -> (Invokable) args -> {
+                        requireZero(args, "actor-task.stop");
+                        actor.stop();
+                        return null;
+                    };
+                    case "join" -> (Invokable) args -> {
+                        requireZero(args, "actor-task.join");
+                        actor.join();
+                        return null;
+                    };
+                    case "alive" -> actor.isAlive();
+                    case "failed" -> actor.failed();
+                    case "kind" -> actor.kind().name().toLowerCase();
+                    default -> throw new IllegalArgumentException("unknown ActorTask member " + name);
+                };
+            }
             if (receiver instanceof ActorRuntime.ActorRef<?> actor) {
                 return switch (name) {
                     case "send" -> (Invokable) args -> {
@@ -859,6 +904,7 @@ public final class OresEvalRootNode extends RootNode {
 
     private record ModuleFacade(Ast.ModuleDecl module) { }
     private record ClassFacade(Ast.ClassDecl klass) { }
+    private record ActorTaskValue(ActorRuntime.ActorRef<?> ref) { }
     private record OptionValue(boolean present, Object value) {
         @Override public String toString(){return present ? "Some(" + value + ")" : "None";}
     }
