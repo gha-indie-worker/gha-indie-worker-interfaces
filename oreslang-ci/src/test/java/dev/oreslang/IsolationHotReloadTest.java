@@ -112,6 +112,113 @@ final class IsolationHotReloadTest {
     }
 
     @Test
+    void staleHotReloadGenerationCannotRollBackSingletonCode() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
+            var first = hot.load("managed-singleton-generation.ores", """
+                    define singleton module managed_generation as
+                      let int count = 0;
+                      pub fnc next() => int {
+                        count = count + 1;
+                        return count;
+                      }
+                    end
+
+                    pub routine main() => void {
+                      val int n = await managed_generation.next();
+                      return;
+                    }
+                    """);
+
+            var second = hot.load("managed-singleton-generation.ores", """
+                    define singleton module managed_generation as
+                      let int count = 0;
+                      pub fnc next() => int {
+                        count = count + 10;
+                        return count;
+                      }
+                    end
+
+                    pub routine main() => void {
+                      val int n = await managed_generation.next();
+                      return;
+                    }
+                    """);
+
+            assertDoesNotThrow(second::start);
+            RuntimeException stale = assertThrows(RuntimeException.class, first::start);
+            assertTrue(String.valueOf(stale.getMessage()).contains("stale singleton generation")
+                    || (stale.getCause() != null
+                    && String.valueOf(stale.getCause().getMessage()).contains("stale singleton generation")));
+        }
+    }
+
+    @Test
+    void failedGenerationRestoresPreviousActiveGeneration() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
+            var stable = hot.load("rollback.ores", """
+                    pub routine main() => void { return; }
+                    """);
+            assertDoesNotThrow(stable::start);
+
+            var broken = hot.load("rollback.ores", """
+                    pub routine main() => void {
+                      val values = arr[1];
+                      val boom = values[99];
+                      return;
+                    }
+                    """);
+            assertEquals(broken.id(), hot.active("rollback.ores").id());
+
+            assertThrows(RuntimeException.class, broken::start);
+            assertTrue(broken.closed());
+            assertEquals(stable.id(), hot.active("rollback.ores").id());
+            assertEquals(stable.id(), hot.active().id());
+            assertEquals(1, hot.liveGenerations());
+        }
+    }
+
+    @Test
+    void closingGenerationDeregistersItFromActiveState() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
+            var generation = hot.load("close-me.ores", """
+                    pub routine main() => void { return; }
+                    """);
+            assertEquals(1, hot.liveGenerations());
+
+            generation.close();
+
+            assertTrue(generation.closed());
+            assertNull(hot.active("close-me.ores"));
+            assertNull(hot.active());
+            assertEquals(0, hot.liveGenerations());
+        }
+    }
+
+    @Test
+    void reservedOresPolicyArgumentsCannotBeOverriddenByExtraMetadata() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+
+        IllegalArgumentException capabilities = assertThrows(IllegalArgumentException.class,
+                () -> policy.restrictedContextBuilder(
+                        ExecutionProfile.serverJit(),
+                        "--ores-capabilities=PROCESS_INFO"));
+        assertTrue(capabilities.getMessage().contains("cannot be overridden"));
+
+        IllegalArgumentException wallTime = assertThrows(IllegalArgumentException.class,
+                () -> policy.restrictedContextBuilder(
+                        ExecutionProfile.serverJit(),
+                        "--ores-max-wall-ms=999999"));
+        assertTrue(wallTime.getMessage().contains("cannot be overridden"));
+
+        assertDoesNotThrow(() -> policy.restrictedContextBuilder(
+                ExecutionProfile.serverJit(),
+                "--ores-code-generation=42"));
+    }
+
+    @Test
     void hotReloadRequiresExplicitCapability() {
         assertThrows(SecurityException.class,
                 () -> new HotReloadManager(IsolatePolicy.strictFaas(), ExecutionProfile.serverJit()));
@@ -171,7 +278,7 @@ final class IsolationHotReloadTest {
     @Test
     void extractedMethodValueKeepsReceiverAndSelfCannotBeRebound() throws Exception {
         String output = run("""
-                define class Box
+                define class Box as
                   val int value;
 
                   pub get() => int {
@@ -188,7 +295,7 @@ final class IsolationHotReloadTest {
         assertEquals("17", output);
 
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define class Box
+                define class Box as
                   pub bad() => void {
                     self = new Box();
                     return;

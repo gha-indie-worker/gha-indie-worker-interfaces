@@ -19,7 +19,7 @@ final class LanguageHardeningTest {
                 import fnc * as funcs from '../xyz';
                 import * as everything from './xyz';
 
-                define module app
+                define module app as
                   pub fnc main() => void { return; }
                 end
                 """);
@@ -39,7 +39,7 @@ final class LanguageHardeningTest {
         assertTrue(tokens.stream().anyMatch(t -> t.type() == Token.Type.END));
 
         assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
-                define module app
+                define module app as
                   fnc main() => void {
                     if true; do
                       return;
@@ -52,18 +52,18 @@ final class LanguageHardeningTest {
     @Test
     void modulesAreTypedNamespacesAndCanAdhereToInterfaces() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module contracts
+                define module contracts as
                   define interface MathApi
                     fnc add(int a, int b) => int;
                   end
                 end
 
                 @AdheresTo(contracts.MathApi)
-                define module math
+                define module math as
                   pub fnc add(int a, int b) => int { return a + b; }
                 end
 
-                define module app
+                define module app as
                   pub fnc main() => void {
                     val answer = math.add(40, 2);
                     stdio.println(answer);
@@ -76,14 +76,14 @@ final class LanguageHardeningTest {
     @Test
     void moduleAdherenceRejectsMissingExports() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module contracts
+                define module contracts as
                   define interface Api
                     fnc ping() => int;
                   end
                 end
 
                 @AdheresTo(contracts.Api)
-                define module broken
+                define module broken as
                   pub fnc pong() => int { return 1; }
                 end
                 """)));
@@ -93,7 +93,7 @@ final class LanguageHardeningTest {
     @Test
     void classesSupportMultipleParentsAndMultipleInterfaces() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module model
+                define module model as
                   define interface AApi
                     fnc a() => int;
                   end
@@ -101,19 +101,19 @@ final class LanguageHardeningTest {
                     fnc b() => int;
                   end
 
-                  define class A
+                  define class A as
                     pub a() => int { return 1; }
                   end
-                  define class B
+                  define class B as
                     pub b() => int { return 2; }
                   end
 
-                  define class Combined extends A, B implements AApi, BApi
+                  define class Combined extends A, B implements AApi, BApi as
                   end
 
-                  define class ObjectChild extends Object
+                  define class ObjectChild extends Object as
                   end
-                  define class ListChild extends List
+                  define class ListChild extends List as
                   end
                 end
                 """)));
@@ -122,23 +122,23 @@ final class LanguageHardeningTest {
     @Test
     void inheritanceCyclesAndConflictingDiamondsAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module m
-                  define class A extends B
+                define module m as
+                  define class A extends B as
                   end
-                  define class B extends A
+                  define class B extends A as
                   end
                 end
                 """)));
 
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module m
-                  define class A
+                define module m as
+                  define class A as
                     pub val int id = 1;
                   end
-                  define class B
+                  define class B as
                     pub val String id = "b";
                   end
-                  define class C extends A, B
+                  define class C extends A, B as
                   end
                 end
                 """)));
@@ -147,7 +147,7 @@ final class LanguageHardeningTest {
     @Test
     void objArrTupleIndexAndLetAssignmentAreStaticallyChecked() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   pub fnc main() => void {
                     val person = obj{name: "ore", age: 1};
                     val values = arr[10, 20, 30];
@@ -166,7 +166,7 @@ final class LanguageHardeningTest {
     @Test
     void valAndConstCannotBeReassigned() {
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc f() => void {
                     val x = 1;
                     x = 2;
@@ -175,7 +175,7 @@ final class LanguageHardeningTest {
                 end
                 """)));
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc f() => void {
                     const x = 1;
                     x = 2;
@@ -188,19 +188,19 @@ final class LanguageHardeningTest {
     @Test
     void nullIsForbiddenAsAValueOrStandaloneTypeButOptionNullIsExplicitlyAllowed() {
         assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
-                define module app
+                define module app as
                   fnc bad() => String { return null; }
                 end
                 """));
 
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc bad(null x) => void { return; }
                 end
                 """)));
 
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc keep(Option<String> x) => Option<String> { return x; }
                   fnc explicit_marker(Option<null> x) => Option<null> { return x; }
                   fnc some_value() => Option<int> { return Some(1); }
@@ -212,7 +212,7 @@ final class LanguageHardeningTest {
     @Test
     void nonVoidFunctionsMustReturnOnEveryControlFlowPath() {
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc incomplete(bool flag) => int {
                     if flag; do
                       return 1;
@@ -222,7 +222,7 @@ final class LanguageHardeningTest {
                 """)));
 
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module app
+                define module app as
                   fnc complete(bool flag) => int {
                     if flag; do
                       return 1;
@@ -239,7 +239,7 @@ final class LanguageHardeningTest {
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
                 import module foo from './a';
                 import class {foo} from './b';
-                define module app
+                define module app as
                 end
                 """)));
     }

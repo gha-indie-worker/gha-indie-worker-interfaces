@@ -15,8 +15,8 @@ final class RoutineAndLoopTest {
     @Test
     void exactFncProgramCompilesAndRuns() throws Exception {
         String program = """
-                define module x
-                  define class y
+                define module x as
+                  define class y as
                   end
                 end
 
@@ -32,8 +32,8 @@ final class RoutineAndLoopTest {
     @Test
     void routineMainCompilesWithSafeSemicolonOmission() throws Exception {
         String program = """
-                define module x
-                  define class y
+                define module x as
+                  define class y as
                   end
                 end
 
@@ -69,8 +69,8 @@ final class RoutineAndLoopTest {
     @Test
     void methodsOverloadOnlyByArity() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                define module m
-                  define class C
+                define module m as
+                  define class C as
                     pub find() => int { return 0; }
                     pub find(int value) => int { return value; }
                   end
@@ -78,8 +78,8 @@ final class RoutineAndLoopTest {
                 """)));
 
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define module m
-                  define class C
+                define module m as
+                  define class C as
                     pub find(int value) => int { return value; }
                     pub find(String value) => int { return 1; }
                   end
@@ -182,8 +182,8 @@ final class RoutineAndLoopTest {
     @Test
     void customJavascriptStyleIteratorDrivesForOf() throws Exception {
         String output = run("""
-                define module collections
-                  define class Bag
+                define module collections as
+                  define class Bag as
                     [Symbol.iterator]() => Array<int> {
                       return arr[4, 5];
                     }

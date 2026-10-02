@@ -13,13 +13,13 @@ final class ParserTest {
     @Test
     void supportsMultipleModulesAndComplexNumbers() {
         String source = """
-                define module math
+                define module math as
                   fnc z() => complex {
                     return 3 + 4i;
                   }
                 end
 
-                define module app
+                define module app as
                   pub fnc main() => void {
                     const answer = 40 + 2;
                     [const first, let second] = [1, 2];
@@ -37,7 +37,7 @@ final class ParserTest {
     @Test
     void parsesIfDoFiWithCommaAndPipeConditions() {
         String source = """
-                define module app
+                define module app as
                   fnc choose(bool a, bool b) => int {
                     if a, b | false; do
                       return 1;
@@ -53,8 +53,8 @@ final class ParserTest {
     @Test
     void methodReceiverIsImplicitOrExplicitSelf() {
         String source = """
-                define module model
-                  define class x
+                define module model as
+                  define class x as
                     @Ret<self>
                     find() {
                       return self;
@@ -71,6 +71,97 @@ final class ParserTest {
         Ast.ClassDecl klass = (Ast.ClassDecl) program.modules().getFirst().declarations().getFirst();
         assertNull(klass.methods().getFirst().explicitReceiverType());
         assertEquals("x", klass.methods().get(1).explicitReceiverType().name());
+    }
+
+    @Test
+    void classAndModuleDeclarationsRequireAsAndIsIsReserved() {
+        IllegalArgumentException module = assertThrows(IllegalArgumentException.class,
+                () -> Parser.parse("""
+                        define module app
+                          pub fnc main() => void { return; }
+                        end
+                        """));
+        assertTrue(module.getMessage().contains("require 'as'"));
+
+        IllegalArgumentException klass = assertThrows(IllegalArgumentException.class,
+                () -> Parser.parse("""
+                        define class Box
+                        end
+                        """));
+        assertTrue(klass.getMessage().contains("require 'as'"));
+
+        var tokens = new Lexer("as is").scan();
+        assertEquals(Token.Type.AS, tokens.get(0).type());
+        assertEquals(Token.Type.IS, tokens.get(1).type());
+    }
+
+    @Test
+    void asAndIsCannotBeDeclaredAsVariableNames() {
+        for (String reserved : java.util.List.of("as", "is")) {
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> Parser.parse("""
+                            define module app as
+                              pub routine main() => void {
+                                let int %s = 1;
+                                return;
+                              }
+                            end
+                            """.formatted(reserved)));
+            assertTrue(error.getMessage().contains("expected binding name")
+                    || error.getMessage().contains("expected"));
+        }
+    }
+
+    @Test
+    void parsesFileAndModuleInitRoutinesAsLifecycleDeclarations() {
+        Ast.Program program = Parser.parse("""
+                init routine() => void {
+                  return;
+                }
+
+                define module app as
+                  init routine() => void {
+                    return;
+                  }
+
+                  pub fnc main() => void {
+                    return;
+                  }
+                end
+                """);
+
+        Ast.ModuleDecl root = program.modules().stream()
+                .filter(module -> module.name().equals(Parser.ROOT_MODULE))
+                .findFirst().orElseThrow();
+        Ast.ModuleDecl app = program.modules().stream()
+                .filter(module -> module.name().equals("app"))
+                .findFirst().orElseThrow();
+
+        assertEquals(1, root.declarations().stream().filter(Ast.InitDecl.class::isInstance).count());
+        assertEquals(1, app.declarations().stream().filter(Ast.InitDecl.class::isInstance).count());
+    }
+
+    @Test
+    void singletonQualifierCannotApplyToAClass() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> Parser.parse("""
+                        define singleton class Foo as
+                        end
+                        """));
+        assertTrue(error.getMessage().contains("'singleton' may only qualify a module"));
+    }
+
+    @Test
+    void classesCannotDeclareLifecycleInitRoutines() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> Parser.parse("""
+                        define class Box as
+                          init routine() => void {
+                            return;
+                          }
+                        end
+                        """));
+        assertTrue(error.getMessage().contains("classes cannot declare init routine"));
     }
 
     @Test
