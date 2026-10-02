@@ -247,7 +247,7 @@ public final class TypeChecker {
         Map<String, Type> members = new LinkedHashMap<>();
         for (Ast.Decl decl : module.declarations()) {
             if (decl instanceof Ast.FunctionDecl fn && fn.visibility() == Ast.Visibility.PUBLIC) {
-                Type signature = functionType(fn.parameters(), fn.returnType(), Set.copyOf(fn.genericParameters()), null);
+                Type signature = callableValueType(fn);
                 mergeMember(members, fn.name(), signature, "module " + module.name());
                 mergeMember(members, methodKey(fn.name(), fn.parameters().size()), signature, "module " + module.name());
             } else if (decl instanceof Ast.FieldDecl field && field.visibility() == Ast.Visibility.PUBLIC) {
@@ -287,6 +287,20 @@ public final class TypeChecker {
         Env env = new Env(null);
         for (Ast.Param param : fn.parameters()) env.define(param.name(), resolveParam(param, generics, null), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
         Type returns = resolve(fn.returnType(), generics, null);
+        if (isActorCallable(fn) && fn.name().equals("main")) {
+            throw new IllegalArgumentException(
+                    "main is the root/process entrypoint and cannot be declared actor; spawn actor callables from main");
+        }
+        if (isActorCallable(fn) && fn.async()) {
+            throw new IllegalArgumentException(
+                    "actor " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name()
+                            + "' cannot also be async; actor already defines the execution boundary");
+        }
+        if (isActorCallable(fn) && returns != Primitive.VOID) {
+            throw new IllegalArgumentException(
+                    "actor " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name()
+                            + "' must declare void; calling it returns ActorTask");
+        }
         checkBlock(fn.body(), env, generics, returns, null);
         if (returns != Primitive.VOID && !definitelyReturns(fn.body())) {
             throw new IllegalArgumentException("non-void " + fn.kind().name().toLowerCase() + " '" + module + "." + fn.name() + "' must explicitly return on every path");
@@ -522,7 +536,7 @@ public final class TypeChecker {
             if (classNamespace != null) return new ClassNamespace(qualifiedClassName(classNamespace));
             if (importedValues.contains(name.name())) return Unknown.INSTANCE;
             Ast.FunctionDecl fn = findFunction(name.name());
-            if (fn != null) return functionType(fn.parameters(), fn.returnType(), Set.copyOf(fn.genericParameters()), null);
+            if (fn != null) return callableValueType(fn);
             throw new IllegalArgumentException("unknown name '" + name.name() + "'");
         }
         if (expr instanceof Ast.AssignExpr assignment) {
@@ -677,6 +691,14 @@ public final class TypeChecker {
                         case "alive", "failed" -> Primitive.BOOL;
                         case "kind" -> Primitive.STRING;
                         default -> throw new IllegalArgumentException("unknown Actor member '" + member.member() + "'");
+                    };
+                }
+                if (named.name().equals("ActorTask") && named.arguments().isEmpty()) {
+                    return switch (member.member()) {
+                        case "stop", "join" -> new Function(List.of(), Primitive.VOID);
+                        case "alive", "failed" -> Primitive.BOOL;
+                        case "kind" -> Primitive.STRING;
+                        default -> throw new IllegalArgumentException("unknown ActorTask member '" + member.member() + "'");
                     };
                 }
                 Ast.ClassDecl klass = findClass(named.name());
@@ -912,6 +934,26 @@ public final class TypeChecker {
         if (expected.result() != Primitive.VOID && !definitelyReturns(lambda.blockBody())) {
             throw new IllegalArgumentException("non-void lambda must explicitly return on every path");
         }
+    }
+
+    private Type callableValueType(Ast.FunctionDecl fn) {
+        Set<String> generics = Set.copyOf(fn.genericParameters());
+        List<Type> parameters = fn.parameters().stream()
+                .map(param -> resolveParam(param, generics, null))
+                .toList();
+        Type result = isActorCallable(fn)
+                ? new Named("ActorTask", List.of())
+                : resolve(fn.returnType(), generics, null);
+        return new Function(parameters, result);
+    }
+
+    private boolean isActorCallable(Ast.FunctionDecl fn) {
+        return fn.annotations().stream().anyMatch(annotation ->
+                annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
+    }
+
+    private boolean isIsolateActorCallable(Ast.FunctionDecl fn) {
+        return fn.annotations().stream().anyMatch(annotation -> annotation.name().equals("__ActorIsolate"));
     }
 
     private Type deref(Type type) {
@@ -1238,6 +1280,10 @@ public final class TypeChecker {
             case "Actor" -> {
                 if (ref.inferArguments() || ref.arguments().size() != 1) throw new IllegalArgumentException("Actor requires exactly one explicit message type argument");
                 yield new Named("Actor", List.of(resolve(ref.arguments().getFirst(), generics, self)));
+            }
+            case "ActorTask" -> {
+                if (ref.inferArguments() || !ref.arguments().isEmpty()) throw new IllegalArgumentException("ActorTask does not take type arguments");
+                yield new Named("ActorTask", List.of());
             }
             case "Fnc" -> {
                 List<Type> args = ref.arguments().stream().map(arg -> resolve(arg, generics, self)).toList();
