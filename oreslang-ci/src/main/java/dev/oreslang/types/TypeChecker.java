@@ -345,6 +345,23 @@ public final class TypeChecker {
         Env env = new Env(null);
         for (Ast.Param param : fn.parameters()) env.define(param.name(), resolveParam(param, generics, null), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
         Type returns = resolve(fn.returnType(), generics, null);
+
+        if (fn.name().equals("init")) {
+            if (!fn.parameters().isEmpty()) {
+                throw new IllegalArgumentException("init lifecycle callable must have zero parameters");
+            }
+            if (!fn.genericParameters().isEmpty()) {
+                throw new IllegalArgumentException("init lifecycle callable cannot declare generic parameters");
+            }
+            if (returns != Primitive.VOID) {
+                throw new IllegalArgumentException("init lifecycle callable must return void");
+            }
+            if (fn.async()) {
+                throw new IllegalArgumentException(
+                        "init lifecycle callable cannot be async; initialization must complete before program readiness");
+            }
+        }
+
         if (isActorCallable(fn) && isLifecycleCallableName(fn.name())) {
             throw new IllegalArgumentException(
                     fn.name() + " is a file/module lifecycle entrypoint and cannot be declared actor");
@@ -680,6 +697,15 @@ public final class TypeChecker {
             };
         }
         if (expr instanceof Ast.CallExpr call) {
+            if (call.callee() instanceof Ast.NameExpr name && name.name().equals("init")) {
+                throw new IllegalArgumentException(
+                        "init is a lifecycle hook and cannot be called directly; startup invokes it exactly once");
+            }
+            if (call.callee() instanceof Ast.MemberExpr member
+                    && member.member().equals("init")) {
+                throw new IllegalArgumentException(
+                        "init is a lifecycle hook and cannot be called directly; startup invokes it exactly once");
+            }
             if (call.callee() instanceof Ast.NameExpr name && name.name().equals("Some")) {
                 if (call.arguments().size() != 1) throw new IllegalArgumentException("Some expects exactly one value");
                 return new Named("Option", List.of(typeOf(call.arguments().getFirst(), env, generics, self)));
