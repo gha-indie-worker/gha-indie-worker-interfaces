@@ -804,8 +804,14 @@ public final class TypeChecker {
             validateLambdaAgainstExpected(lambda, fn, env, generics, self);
             return fn;
         }
-        if (expected instanceof Tuple && expr instanceof Ast.ListExpr list) {
-            return new Tuple(list.elements().stream().map(item -> typeOf(item, env, generics, self)).toList());
+        if (expr instanceof Ast.ListExpr list) {
+            if (expected instanceof Tuple) {
+                return new Tuple(list.elements().stream().map(item -> typeOf(item, env, generics, self)).toList());
+            }
+            if (expected instanceof Union union
+                    && union.options().stream().allMatch(option -> option instanceof Tuple)) {
+                return new Tuple(list.elements().stream().map(item -> typeOf(item, env, generics, self)).toList());
+            }
         }
         return typeOf(expr, env, generics, self);
     }
