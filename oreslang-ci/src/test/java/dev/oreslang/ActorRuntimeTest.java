@@ -75,4 +75,80 @@ final class ActorRuntimeTest {
             assertNotNull(shared.value());
         }
     }
+
+    @Test
+    void failedActorDoesNotKillSiblingOrJoiner() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch siblingReceived = new CountDownLatch(1);
+
+            var bad = runtime.<String>spawn(() -> (message, context) -> {
+                throw new IllegalStateException("boom");
+            });
+            var good = runtime.<String>spawn(() -> (message, context) -> {
+                siblingReceived.countDown();
+            });
+
+            bad.send("explode");
+            bad.join();
+
+            assertFalse(bad.isAlive());
+            assertTrue(bad.failed());
+            assertInstanceOf(IllegalStateException.class, bad.failure());
+
+            good.send("still-alive");
+            assertTrue(siblingReceived.await(2, TimeUnit.SECONDS));
+            good.stop();
+            good.join();
+            assertFalse(good.failed());
+        }
+    }
+
+    @Test
+    void behaviorFactoryFailureIsRecordedAndDoesNotLeakActorCell() {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var ref = runtime.<String>spawn(() -> {
+                throw new IllegalStateException("factory boom");
+            });
+
+            ref.join();
+
+            assertFalse(ref.isAlive());
+            assertTrue(ref.failed());
+            assertInstanceOf(IllegalStateException.class, ref.failure());
+            assertThrows(IllegalStateException.class, () -> ref.send("late"));
+        }
+    }
+
+    @Test
+    void gracefulStopDrainsMessagesQueuedBeforeStop() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch received = new CountDownLatch(2);
+            var ref = runtime.<String>spawn(() -> (message, context) -> received.countDown());
+
+            ref.send("one");
+            ref.send("two");
+            ref.stop();
+            ref.join();
+
+            assertEquals(0, received.getCount());
+            assertFalse(ref.isAlive());
+            assertFalse(ref.failed());
+        }
+    }
+
+    @Test
+    void actorKindIsObservableWithoutChangingFailureIsolation() {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var shared = runtime.<String>spawn(ActorRuntime.ActorKind.SHARED, () -> (message, context) -> { });
+            var isolated = runtime.<String>spawn(ActorRuntime.ActorKind.ISOLATE, () -> (message, context) -> { });
+
+            assertEquals(ActorRuntime.ActorKind.SHARED, shared.kind());
+            assertEquals(ActorRuntime.ActorKind.ISOLATE, isolated.kind());
+
+            shared.stop();
+            isolated.stop();
+            shared.join();
+            isolated.join();
+        }
+    }
 }
