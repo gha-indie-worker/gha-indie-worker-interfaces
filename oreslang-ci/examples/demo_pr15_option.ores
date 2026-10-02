@@ -1,0 +1,18 @@
+namespace option_result_demo;
+
+fnc maybe(bool present) => Option<int> {
+  if present; do return Some(42); else return None; fi
+}
+
+pub routine main() => void {
+  val Option<int> present = maybe(true);
+  val answer = present.unwrap();
+  val Option<int> missing = maybe(false);
+  val safe = missing.unwrap_safe();
+  val Result<int, String> parsed = Ok(7);
+  val preserved = parsed.unwrap_safe();
+  stdio.println(answer);
+  stdio.println(safe.is_err());
+  stdio.println(preserved.is_ok());
+  return;
+}
