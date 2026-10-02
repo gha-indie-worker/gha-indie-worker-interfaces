@@ -26,7 +26,7 @@ jobs:
             maven:3.9.11-eclipse-temurin-21 \
             mvn -B -ntp verify
 
-      - name: Run new Oreslang demo examples
+      - name: Run full Oreslang demo suite
         run: |
           docker run --rm \
             -v "$PWD/oreslang-ci:/work" \
@@ -34,11 +34,7 @@ jobs:
             maven:3.9.11-eclipse-temurin-21 \
             bash -lc '
               set -euo pipefail
-              for example in \
-                examples/05_defer_lifo.ores \
-                examples/06_defer_producers.ores \
-                examples/07_break_continue.ores \
-                examples/08_loop_cleanup.ores
+              for example in examples/*.ores
               do
                 echo "==> $example"
                 mvn -B -ntp -DskipTests compile exec:java -Dexec.args="$example"
