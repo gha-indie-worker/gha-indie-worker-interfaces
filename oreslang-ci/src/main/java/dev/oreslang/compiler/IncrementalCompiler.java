@@ -107,6 +107,82 @@ public final class IncrementalCompiler {
         return new BuildResult(Map.copyOf(next), Set.copyOf(rebuilt), Set.copyOf(reused));
     }
 
+    /**
+     * Produces the startup contract for one entry unit.
+     *
+     * All reachable units in {@code loadOrder} must be parsed/linked before the
+     * first init hook in {@code initHooks} executes. Circular imports are legal:
+     * dependency DFS treats an in-progress unit as an already-linked back-edge,
+     * not as a compilation error.
+     */
+    private static StartupPlan startupPlan(Map<String, CompiledUnit> units, String entryUnit) {
+        String entry = normalizeUnitId(entryUnit);
+        if (!units.containsKey(entry)) {
+            throw new IllegalArgumentException("unknown startup entry unit '" + entry + "'");
+        }
+
+        LinkedHashSet<String> reachable = new LinkedHashSet<>();
+        collectReachable(entry, units, reachable);
+
+        List<String> loadOrder = new ArrayList<>(reachable);
+        loadOrder.sort(String::compareTo);
+
+        ArrayList<String> initializationUnitOrder = new ArrayList<>();
+        LinkedHashSet<String> visiting = new LinkedHashSet<>();
+        LinkedHashSet<String> initialized = new LinkedHashSet<>();
+        appendDependencyFirst(entry, units, reachable, visiting, initialized, initializationUnitOrder);
+
+        ArrayList<InitHook> hooks = new ArrayList<>();
+        for (String unitId : initializationUnitOrder) {
+            CompiledUnit unit = units.get(unitId);
+            for (Ast.ModuleDecl module : unit.program().modules()) {
+                for (Ast.Decl decl : module.declarations()) {
+                    if (decl instanceof Ast.FunctionDecl fn && fn.name().equals("init")) {
+                        hooks.add(new InitHook(unitId, module.name(), fn.kind()));
+                    }
+                }
+            }
+        }
+
+        return new StartupPlan(loadOrder, initializationUnitOrder, hooks);
+    }
+
+    private static void collectReachable(
+            String unitId,
+            Map<String, CompiledUnit> units,
+            Set<String> reachable) {
+        if (!reachable.add(unitId)) return;
+        ArrayList<String> deps = new ArrayList<>(units.get(unitId).dependencies());
+        deps.sort(String::compareTo);
+        for (String dependency : deps) {
+            if (units.containsKey(dependency)) collectReachable(dependency, units, reachable);
+        }
+    }
+
+    private static void appendDependencyFirst(
+            String unitId,
+            Map<String, CompiledUnit> units,
+            Set<String> reachable,
+            Set<String> visiting,
+            Set<String> initialized,
+            List<String> order) {
+        if (initialized.contains(unitId)) return;
+
+        // A back-edge means the whole dependency cycle has already completed
+        // the load/link phase. Do not recurse and do not reject the cycle.
+        if (!visiting.add(unitId)) return;
+
+        ArrayList<String> deps = new ArrayList<>(units.get(unitId).dependencies());
+        deps.removeIf(dep -> !reachable.contains(dep));
+        deps.sort(String::compareTo);
+        for (String dependency : deps) {
+            appendDependencyFirst(dependency, units, reachable, visiting, initialized, order);
+        }
+
+        visiting.remove(unitId);
+        if (initialized.add(unitId)) order.add(unitId);
+    }
+
     public synchronized void clear() {
         cache.clear();
     }
@@ -308,5 +384,29 @@ public final class IncrementalCompiler {
 
         public boolean rebuilt(String unitId) { return rebuiltUnits.contains(normalizeUnitId(unitId)); }
         public boolean reused(String unitId) { return reusedUnits.contains(normalizeUnitId(unitId)); }
+
+        public StartupPlan startupPlan(String entryUnit) {
+            return IncrementalCompiler.startupPlan(units, entryUnit);
+        }
     }
+
+    /**
+     * Two-phase project startup plan. Consumers must complete the entire
+     * loadOrder before invoking any init hook.
+     */
+    public record StartupPlan(
+            List<String> loadOrder,
+            List<String> initializationUnitOrder,
+            List<InitHook> initHooks) {
+        public StartupPlan {
+            loadOrder = List.copyOf(loadOrder);
+            initializationUnitOrder = List.copyOf(initializationUnitOrder);
+            initHooks = List.copyOf(initHooks);
+        }
+    }
+
+    public record InitHook(
+            String unitId,
+            String moduleName,
+            Ast.CallableKind callableKind) { }
 }
