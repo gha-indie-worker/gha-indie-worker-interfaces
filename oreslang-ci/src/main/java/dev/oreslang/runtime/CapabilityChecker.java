@@ -32,6 +32,8 @@ public final class CapabilityChecker {
             else if (stmt instanceof Ast.ReturnStmt s && s.value() != null) checkExpr(s.value(), policy);
             else if (stmt instanceof Ast.ExprStmt s) checkExpr(s.expression(), policy);
             else if (stmt instanceof Ast.DeferStmt s) checkExpr(s.expression(), policy);
+            else if (stmt instanceof Ast.RecoverStmt s) checkExpr(s.handler(), policy);
+            else if (stmt instanceof Ast.PanicStmt s) checkExpr(s.value(), policy);
             else if (stmt instanceof Ast.IfStmt s) {
                 for (Ast.IfBranch b : s.branches()) {
                     checkExpr(b.condition(), policy);
@@ -88,6 +90,9 @@ public final class CapabilityChecker {
         else if (expr instanceof Ast.LambdaExpr e) {
             if (e.expressionBody() != null) checkExpr(e.expressionBody(), policy);
             if (e.blockBody() != null) checkStatements(e.blockBody(), policy);
+        } else if (expr instanceof Ast.ActorExpr e) {
+            if (e.behavior().expressionBody() != null) checkExpr(e.behavior().expressionBody(), policy);
+            if (e.behavior().blockBody() != null) checkStatements(e.behavior().blockBody(), policy);
         }
     }
 
