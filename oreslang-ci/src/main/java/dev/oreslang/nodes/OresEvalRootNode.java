@@ -172,7 +172,7 @@ public final class OresEvalRootNode extends RootNode {
             }
 
             if (failure != null) {
-                if (failure instanceof java.util.concurrent.CancellationException) throw failure;
+                if (isNonRecoverable(failure)) throw failure;
                 RecoveryResult recovered = recoverFailure(frame, failure);
                 if (recovered.recovered()) return recovered.value();
                 throw recovered.failure();
@@ -192,6 +192,11 @@ public final class OresEvalRootNode extends RootNode {
                 }
             }
             return RecoveryResult.unrecovered(current);
+        }
+
+        private boolean isNonRecoverable(RuntimeException failure) {
+            return failure instanceof java.util.concurrent.CancellationException
+                    || failure instanceof SecurityException;
         }
 
         private Object failureValue(RuntimeException failure) {
@@ -904,7 +909,9 @@ public final class OresEvalRootNode extends RootNode {
 
     private record ModuleFacade(Ast.ModuleDecl module) { }
     private record ClassFacade(Ast.ClassDecl klass) { }
-    private record ActorTaskValue(ActorRuntime.ActorRef<?> ref) { }
+    private record ActorTaskValue(ActorRuntime.ActorRef<?> ref) implements ActorRuntime.Sendable {
+        @Override public Object freezeForSend() { return this; }
+    }
     private record OptionValue(boolean present, Object value) {
         @Override public String toString(){return present ? "Some(" + value + ")" : "None";}
     }
