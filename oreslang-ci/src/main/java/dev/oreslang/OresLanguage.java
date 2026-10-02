@@ -10,6 +10,12 @@ import dev.oreslang.nodes.OresInteropRootNode;
 import dev.oreslang.runtime.OresContext;
 import org.graalvm.polyglot.SandboxPolicy;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+
 @TruffleLanguage.Registration(
         id = OresLanguage.ID,
         name = "Oreslang",
@@ -35,9 +41,39 @@ public final class OresLanguage extends TruffleLanguage<OresContext> {
 
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        String text = request.getSource().getCharacters().toString();
+        var source = request.getSource();
+        String text = source.getCharacters().toString();
         Ast.Program program = OresCompiler.parseAndTypeCheck(text);
-        RootCallTarget evaluator = new OresEvalRootNode(this, program).getCallTarget();
+        String codeUnitId = source.getPath();
+        if (codeUnitId == null || codeUnitId.isBlank()) {
+            codeUnitId = source.getName();
+        } else {
+            try {
+                codeUnitId = Path.of(codeUnitId)
+                        .toAbsolutePath()
+                        .normalize()
+                        .toString()
+                        .replace('\\', '/');
+            } catch (InvalidPathException invalidPath) {
+                throw new IllegalArgumentException("invalid Oreslang source path identity", invalidPath);
+            }
+        }
+        if (codeUnitId == null || codeUnitId.isBlank()) codeUnitId = "<anonymous>";
+        RootCallTarget evaluator = new OresEvalRootNode(
+                this,
+                program,
+                codeUnitId,
+                sourceDigest(text)).getCallTarget();
         return new OresInteropRootNode(this, evaluator).getCallTarget();
+    }
+
+    private static String sourceDigest(String source) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(source.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 }

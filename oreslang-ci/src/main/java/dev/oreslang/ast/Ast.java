@@ -25,15 +25,20 @@ public final class Ast {
         public ImportDecl { names = List.copyOf(names); }
     }
 
-    public record ModuleDecl(String name, List<Annotation> annotations, List<Decl> declarations) {
+    public record ModuleDecl(String name, boolean singleton, List<Annotation> annotations, List<Decl> declarations) {
         public ModuleDecl {
             annotations = List.copyOf(annotations);
             declarations = List.copyOf(declarations);
         }
-        public ModuleDecl(String name, List<Decl> declarations) { this(name, List.of(), declarations); }
+        public ModuleDecl(String name, List<Annotation> annotations, List<Decl> declarations) {
+            this(name, false, annotations, declarations);
+        }
+        public ModuleDecl(String name, List<Decl> declarations) {
+            this(name, false, List.of(), declarations);
+        }
     }
 
-    public sealed interface Decl permits FunctionDecl, ClassDecl, InterfaceDecl, FieldDecl, TypeAliasDecl { }
+    public sealed interface Decl permits FunctionDecl, InitDecl, ClassDecl, InterfaceDecl, FieldDecl, TypeAliasDecl { }
 
     public enum Visibility { PRIVATE, PUBLIC }
     public enum CallableKind { FNC, ROUTINE }
@@ -68,6 +73,12 @@ public final class Ast {
     public record Param(TypeRef type, String name, boolean structural, boolean mutable) {
         public Param(TypeRef type, String name) { this(type, name, false, false); }
         public Param(TypeRef type, String name, boolean structural) { this(type, name, structural, false); }
+    }
+
+    /** Lifecycle routine. Scope is derived from its containing module:
+     * root/ordinary module => actor-local; singleton module => process-local. */
+    public record InitDecl(List<Stmt> body) implements Decl {
+        public InitDecl { body = List.copyOf(body); }
     }
 
     public record FunctionDecl(
@@ -177,10 +188,9 @@ public final class Ast {
     }
 
     public enum BindingKind { CONST, VAL, LET }
-    public enum ActorMode { SHARED, ISOLATE }
 
     public sealed interface Stmt permits BindingStmt, DestructureStmt, ReturnStmt, ExprStmt, DeferStmt,
-            RecoverStmt, PanicStmt, BreakStmt, ContinueStmt, IfStmt, TryStmt, ForOfStmt, ForStmt { }
+            IfStmt, TryStmt, ForOfStmt, ForStmt { }
 
     public record BindingStmt(BindingKind kind, TypeRef declaredType, String name, Expr initializer) implements Stmt { }
     public record DestructureBinding(BindingKind kind, String name) { }
@@ -191,21 +201,7 @@ public final class Ast {
 
     public record ReturnStmt(Expr value) implements Stmt { }
     public record ExprStmt(Expr expression) implements Stmt { }
-    /**
-     * The operand is evaluated immediately at the defer site. Its resulting
-     * value must be a zero-arity callable, which is registered on the enclosing
-     * callable's LIFO defer stack and invoked when that callable exits.
-     */
     public record DeferStmt(Expr expression) implements Stmt { }
-    /**
-     * Evaluates the handler immediately and registers the resulting arity-1
-     * callable on the current callable's recovery frame. It is invoked only
-     * while a failure is unwinding out of that callable.
-     */
-    public record RecoverStmt(Expr handler) implements Stmt { }
-    public record PanicStmt(Expr value) implements Stmt { }
-    public record BreakStmt() implements Stmt { }
-    public record ContinueStmt() implements Stmt { }
 
     public record IfBranch(Expr condition, List<Stmt> body) {
         public IfBranch { body = List.copyOf(body); }
@@ -235,7 +231,7 @@ public final class Ast {
     }
 
     public sealed interface Expr permits LiteralExpr, NameExpr, BinaryExpr, UnaryExpr, AssignExpr, ConditionalExpr,
-            CallExpr, MemberExpr, IndexExpr, NewExpr, AwaitExpr, ListExpr, TupleExpr, ObjectExpr, LambdaExpr, ActorExpr { }
+            CallExpr, MemberExpr, IndexExpr, NewExpr, AwaitExpr, ListExpr, TupleExpr, ObjectExpr, LambdaExpr { }
 
     public record LiteralExpr(Object value) implements Expr { }
     public record Imaginary(double coefficient) { }
@@ -278,7 +274,4 @@ public final class Ast {
             blockBody = blockBody == null ? null : List.copyOf(blockBody);
         }
     }
-
-    /** A first-class mailbox actor. SHARED is the default; ISOLATE requests the stronger isolation backend. */
-    public record ActorExpr(ActorMode mode, LambdaExpr behavior) implements Expr { }
 }

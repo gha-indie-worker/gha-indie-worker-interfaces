@@ -5,14 +5,22 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import dev.oreslang.OresLanguage;
 import dev.oreslang.ast.Ast;
-import dev.oreslang.runtime.OresContext;
 import dev.oreslang.runtime.ActorRuntime;
+import dev.oreslang.runtime.ExecutionTerminated;
+import dev.oreslang.runtime.OresContext;
+import dev.oreslang.runtime.OresValues.Complex;
+import dev.oreslang.runtime.OresValues.OptionValue;
 import dev.oreslang.runtime.CapabilityChecker;
 import dev.oreslang.runtime.IsolatePolicy;
+import dev.oreslang.runtime.ProcessSingletonRegistry;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,10 +32,38 @@ import java.util.concurrent.CompletionStage;
 /** Executable Truffle root. Parsing and static checks happen before this node is created. */
 public final class OresEvalRootNode extends RootNode {
     private final Ast.Program program;
+    private final String codeUnitId;
+    private final String codeUnitDigest;
 
     public OresEvalRootNode(OresLanguage language, Ast.Program program) {
+        this(language, program, "<anonymous>", digestText(program.toString()));
+    }
+
+    public OresEvalRootNode(OresLanguage language, Ast.Program program, String codeUnitId) {
+        this(language, program, codeUnitId, digestText(program.toString()));
+    }
+
+    public OresEvalRootNode(
+            OresLanguage language,
+            Ast.Program program,
+            String codeUnitId,
+            String codeUnitDigest) {
         super(language);
         this.program = program;
+        this.codeUnitId = codeUnitId == null || codeUnitId.isBlank() ? "<anonymous>" : codeUnitId;
+        this.codeUnitDigest = codeUnitDigest == null || codeUnitDigest.isBlank()
+                ? digestText(program.toString())
+                : codeUnitDigest;
+    }
+
+    private static String digestText(String text) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     @Override public String getName() { return "ores-eval"; }
@@ -41,21 +77,32 @@ public final class OresEvalRootNode extends RootNode {
     @TruffleBoundary
     private Object executeBoundary(OresContext context, Object[] arguments) {
         CapabilityChecker.check(program, context.isolatePolicy());
-        return new Evaluator(program, context).execute(arguments);
+        return new Evaluator(program, context, codeUnitId, codeUnitDigest).execute(arguments);
     }
 
     private static final class Evaluator {
         private final Ast.Program program;
         private final OresContext context;
+        private final String codeUnitId;
+        private final String codeUnitDigest;
         private final Map<String, Ast.FunctionDecl> functions = new HashMap<>();
         private final Map<String, Ast.ClassDecl> classes = new HashMap<>();
         private final Map<String, Ast.ModuleDecl> modules = new HashMap<>();
+        private final IdentityHashMap<Ast.FunctionDecl, String> functionOwners = new IdentityHashMap<>();
+        private final IdentityHashMap<Ast.ClassDecl, String> classOwners = new IdentityHashMap<>();
+        private final IdentityHashMap<Ast.ModuleDecl, String> singletonSchemas = new IdentityHashMap<>();
         private final Set<String> ambiguousFunctions = new LinkedHashSet<>();
         private final Set<String> ambiguousClasses = new LinkedHashSet<>();
 
-        private Evaluator(Ast.Program program, OresContext context) {
+        private Evaluator(
+                Ast.Program program,
+                OresContext context,
+                String codeUnitId,
+                String codeUnitDigest) {
             this.program = program;
             this.context = context;
+            this.codeUnitId = codeUnitId;
+            this.codeUnitDigest = codeUnitDigest;
             indexDeclarations();
         }
 
@@ -63,8 +110,13 @@ public final class OresEvalRootNode extends RootNode {
             for (Ast.ModuleDecl module : program.modules()) {
                 modules.put(module.name(), module);
                 for (Ast.Decl decl : module.declarations()) {
-                    if (decl instanceof Ast.FunctionDecl fn) index(functions, ambiguousFunctions, module.name(), fn.name(), fn);
-                    else if (decl instanceof Ast.ClassDecl klass) index(classes, ambiguousClasses, module.name(), klass.name(), klass);
+                    if (decl instanceof Ast.FunctionDecl fn) {
+                        index(functions, ambiguousFunctions, module.name(), fn.name(), fn);
+                        functionOwners.put(fn, module.name());
+                    } else if (decl instanceof Ast.ClassDecl klass) {
+                        index(classes, ambiguousClasses, module.name(), klass.name(), klass);
+                        classOwners.put(klass, module.name());
+                    }
                 }
             }
         }
@@ -89,146 +141,323 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object execute(Object[] arguments) {
+            Ast.ModuleDecl root = modules.get(dev.oreslang.parser.Parser.ROOT_MODULE);
+            if (root != null && !root.singleton()) actorModuleState(root);
+
             Ast.FunctionDecl main = findFunction("main");
             if (main == null) return null;
-            return callFunction(main, List.of(arguments));
+            Object result = callFunction(main, List.of(arguments));
+            if (result instanceof CompletionStage<?> stage) return stage.toCompletableFuture().join();
+            return result;
         }
 
         private Object callFunction(Ast.FunctionDecl fn, List<?> args) {
-            if (args.size() != fn.parameters().size()) {
-                if (fn.parameters().isEmpty() && args.size() == 1 && args.getFirst() instanceof Object[] array && array.length == 0) args = List.of();
-                else throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
-            }
-
-            if (isActorCallable(fn)) {
-                ActorRuntime.ActorKind kind = isIsolateActorCallable(fn)
-                        ? ActorRuntime.ActorKind.ISOLATE
-                        : ActorRuntime.ActorKind.SHARED;
-                ActorRuntime.ActorRef<List<?>> ref = context.actors().spawn(kind, () -> (message, actorContext) -> {
-                    invokeFunctionBody(fn, message);
-                });
-                ref.send(new ArrayList<>(args));
-                ref.stop();
-                return new ActorTaskValue(ref);
-            }
-
-            return invokeFunctionBody(fn, args);
+            Ast.ModuleDecl owner = ownerModule(fn);
+            if (owner != null && owner.singleton()) return callSingleton(owner, fn, normalizeArgs(fn, args));
+            return callFunctionDirect(fn, normalizeArgs(fn, args));
         }
 
-        private Object invokeFunctionBody(Ast.FunctionDecl fn, List<?> args) {
-            Env env = new Env(null);
+        private List<?> normalizeArgs(Ast.FunctionDecl fn, List<?> args) {
+            if (args.size() != fn.parameters().size()) {
+                if (fn.parameters().isEmpty() && args.size() == 1 && args.getFirst() instanceof Object[] array && array.length == 0) {
+                    return List.of();
+                }
+                throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
+            }
+            return args;
+        }
+
+        private Object callFunctionDirect(Ast.FunctionDecl fn, List<?> args) {
+            Ast.ModuleDecl owner = ownerModule(fn);
+            Env moduleState = owner == null || owner.singleton() ? null : actorModuleState(owner);
+            Env env = new Env(moduleState);
+            return executeFunctionBody(fn, args, env);
+        }
+
+        private Env actorModuleState(Ast.ModuleDecl module) {
+            if (module.singleton()) throw new IllegalArgumentException("singleton modules use process-owned state");
+
+            ActorModuleStateKey actorKey = new ActorModuleStateKey(
+                    codeUnitId,
+                    program.namespace() == null ? "<default>" : program.namespace(),
+                    module.name(),
+                    codeUnitDigest);
+            Env actorState = context.actors().currentActorLocal(
+                    actorKey,
+                    () -> initializeOrdinaryModuleState(module));
+            if (actorState != null) return actorState;
+
+            // Main/non-actor evaluation persists for the Graal context
+            // lifetime, even if the same call target is invoked repeatedly.
+            return context.contextLocal(actorKey, () -> initializeOrdinaryModuleState(module));
+        }
+
+        private Env initializeOrdinaryModuleState(Ast.ModuleDecl module) {
+            Env state = new Env(null);
+            for (Ast.Decl decl : module.declarations()) {
+                if (!(decl instanceof Ast.FieldDecl field)) continue;
+                if (field.initializer() == null) {
+                    throw new IllegalArgumentException("module field has no initializer: " + module.name() + "." + field.name());
+                }
+                state.define(field.name(), eval(field.initializer(), state), field.bindingKind());
+            }
+            Ast.InitDecl init = findInit(module);
+            if (init != null) executeInitializer(init, state);
+            return state;
+        }
+
+        private Ast.InitDecl findInit(Ast.ModuleDecl module) {
+            Ast.InitDecl found = null;
+            for (Ast.Decl decl : module.declarations()) {
+                if (!(decl instanceof Ast.InitDecl init)) continue;
+                if (found != null) throw new IllegalStateException("multiple init routines survived static checking in " + module.name());
+                found = init;
+            }
+            return found;
+        }
+
+        private void executeInitializer(Ast.InitDecl init, Env state) {
+            try {
+                executeBlock(init.body(), state);
+            } catch (ReturnSignal signal) {
+                if (signal.value != null) throw new IllegalStateException("init routine returned a value after static checking");
+            }
+        }
+
+        private Object callSingletonFunction(SingletonState state, Ast.FunctionDecl fn, List<?> args) {
+            Ast.ModuleDecl owner = ownerModule(fn);
+            if (!state.key.equals(singletonKey(owner))) {
+                throw new IllegalStateException("singleton function dispatched to wrong actor state");
+            }
+            String currentSchema = singletonSchema(owner);
+            if (!state.schema.equals(currentSchema)) {
+                throw new IllegalStateException("singleton module state schema changed for " + owner.name()
+                        + "; process-lifetime state cannot be reinterpreted without an explicit migration");
+            }
+            authorizeSingletonCodeGeneration(state, owner);
+            Env env = new Env(state.fields, state);
+            return executeFunctionBody(fn, args, env);
+        }
+
+        private Object executeFunctionBody(Ast.FunctionDecl fn, List<?> args, Env env) {
+            if (env.singletonState != null) ProcessSingletonRegistry.checkExecutionBudget();
+            if (args.size() != fn.parameters().size()) {
+                throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
+            }
             for (int i = 0; i < fn.parameters().size(); i++) {
                 Ast.Param param = fn.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(fn.body(), env);
+            try {
+                executeBlock(fn.body(), env);
+                return null;
+            } catch (ReturnSignal signal) {
+                return signal.value;
+            }
         }
 
-        private boolean isActorCallable(Ast.FunctionDecl fn) {
-            return fn.annotations().stream().anyMatch(annotation ->
-                    annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
+        private CompletionStage<Object> callSingleton(Ast.ModuleDecl module, Ast.FunctionDecl fn, List<?> args) {
+            ProcessSingletonRegistry.Handle<SingletonState> handle = singletonHandle(module);
+            return handle.call(
+                    args,
+                    context.isolatePolicy().maxMailboxMessages(),
+                    context.isolatePolicy().maxWallTime(),
+                    (state, frozenArgs) -> transactionalSingletonCall(
+                            state,
+                            working -> callSingletonFunction(working, fn, frozenArgs)));
         }
 
-        private boolean isIsolateActorCallable(Ast.FunctionDecl fn) {
-            return fn.annotations().stream().anyMatch(annotation -> annotation.name().equals("__ActorIsolate"));
+        private Object transactionalSingletonCall(
+                SingletonState canonical,
+                SingletonWork work) {
+            SingletonState working = canonical.transactionalCopy();
+            Object result = work.apply(working);
+            // The commit itself is the linearization point. If the caller's
+            // deadline elapsed while executing, discard the working state.
+            ProcessSingletonRegistry.checkExecutionBudget();
+            working.validateStorageGraph();
+            canonical.commitFrom(working);
+            return result;
         }
 
-        private Object callMethod(OresObject receiver, Ast.MethodDecl method, List<?> args) {
+        private ProcessSingletonRegistry.Handle<SingletonState> singletonHandle(Ast.ModuleDecl module) {
+            ProcessSingletonRegistry.requireBackendFor(context.graalIsolated());
+            String key = singletonKey(module);
+            // Do not cache handles per evaluator. A retryable initialization
+            // failure replaces the registry cell; every access must resolve the
+            // current process cell rather than pinning a stale failed handle.
+            return ProcessSingletonRegistry.getOrCreate(key, () -> initializeSingleton(module));
+        }
+
+        private SingletonState initializeSingleton(Ast.ModuleDecl module) {
+            SingletonState state = new SingletonState(
+                    singletonKey(module),
+                    singletonSchema(module),
+                    singletonCodeDigest(module),
+                    context.codeGeneration());
+            for (Ast.Decl decl : module.declarations()) {
+                if (!(decl instanceof Ast.FieldDecl field)) continue;
+                if (field.initializer() == null) {
+                    throw new IllegalArgumentException("singleton field has no initializer: " + module.name() + "." + field.name());
+                }
+                Object value = eval(field.initializer(), state.fields);
+                state.fields.define(field.name(), value, field.bindingKind());
+            }
+            Ast.InitDecl init = findInit(module);
+            if (init != null) executeInitializer(init, state.fields);
+            return state;
+        }
+
+        private String singletonKey(Ast.ModuleDecl module) {
+            String namespace = program.namespace();
+            String namespaceIdentity = namespace == null || namespace.isBlank() ? "<default>" : namespace;
+            return "ores:" + codeUnitId + ":" + namespaceIdentity + ":" + module.name();
+        }
+
+        private String singletonSchema(Ast.ModuleDecl module) {
+            return singletonSchemas.computeIfAbsent(module, ignored -> {
+                StringBuilder schema = new StringBuilder();
+                for (Ast.Decl decl : module.declarations()) {
+                    if (!(decl instanceof Ast.FieldDecl field)) continue;
+                    schema.append(field.name())
+                            .append(':').append(field.bindingKind())
+                            .append(':').append(field.type());
+                    Ast.ClassDecl stateClass = field.type() == null ? null : findClass(field.type().name());
+                    if (stateClass != null) {
+                        schema.append(":class=").append(runtimeClassId(stateClass)).append('{');
+                        for (Ast.FieldDecl classField : effectiveFields(stateClass, new LinkedHashSet<>())) {
+                            schema.append(classField.name())
+                                    .append(':').append(classField.bindingKind())
+                                    .append(':').append(classField.type())
+                                    .append(';');
+                        }
+                        schema.append('}');
+                    }
+                    schema.append(';');
+                }
+                return schema.toString();
+            });
+        }
+
+        private String singletonCodeDigest(Ast.ModuleDecl module) {
+            // The whole checked code unit is the behavior provenance boundary:
+            // singleton code may call helpers declared outside the module.
+            return codeUnitDigest;
+        }
+
+        private void authorizeSingletonCodeGeneration(SingletonState state, Ast.ModuleDecl module) {
+            String digest = singletonCodeDigest(module);
+            long generation = context.codeGeneration();
+
+            if (state.activeCodeDigest.equals(digest)) {
+                if (generation > state.activeGeneration) state.activeGeneration = generation;
+                return;
+            }
+
+            context.requireCapability(IsolatePolicy.Capability.HOT_CODE_LOAD,
+                    "singleton hot reload for " + module.name());
+
+            if (state.activeGeneration > 0) {
+                if (generation == 0) {
+                    throw new SecurityException("unversioned context cannot replace managed singleton code for "
+                            + module.name());
+                }
+                if (generation < state.activeGeneration) {
+                    throw new SecurityException("stale singleton generation " + generation
+                            + " cannot replace active generation " + state.activeGeneration
+                            + " for " + module.name());
+                }
+                if (generation == state.activeGeneration) {
+                    throw new SecurityException("conflicting singleton code digest at generation " + generation
+                            + " for " + module.name());
+                }
+            }
+
+            state.activeCodeDigest = digest;
+            if (generation > 0) state.activeGeneration = generation;
+        }
+
+        private Ast.ModuleDecl ownerModule(Ast.FunctionDecl fn) {
+            String owner = functionOwners.get(fn);
+            return owner == null ? null : modules.get(owner);
+        }
+
+        private Ast.ModuleDecl ownerModule(Ast.ClassDecl klass) {
+            String owner = classOwners.get(klass);
+            return owner == null ? null : modules.get(owner);
+        }
+
+        private String runtimeClassId(Ast.ClassDecl klass) {
+            String owner = classOwners.get(klass);
+            if (owner == null) {
+                throw new IllegalStateException("class has no indexed module owner: " + klass.name());
+            }
+            return owner + "." + klass.name();
+        }
+
+        private Object callMethod(
+                OresObject receiver,
+                Ast.ClassDecl dispatchClass,
+                Ast.MethodDecl method,
+                List<?> args,
+                SingletonState singletonState) {
+            if (singletonState != null) ProcessSingletonRegistry.checkExecutionBudget();
             if (args.size() != method.parameters().size()) throw new IllegalArgumentException("method " + method.name() + " arity mismatch");
-            Env env = new Env(null);
+            Env lexical = classLexicalModuleState(dispatchClass, singletonState);
+            Env env = new Env(lexical, singletonState);
             if (!method.isStatic()) env.define("self", receiver, Ast.BindingKind.VAL);
             for (int i = 0; i < method.parameters().size(); i++) {
                 Ast.Param param = method.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(method.body(), env);
-        }
-
-        private Object executeCallableBody(List<Ast.Stmt> body, Env env) {
-            CallFrame frame = new CallFrame();
-            Object result = null;
-            RuntimeException bodyFailure = null;
-
             try {
-                executeBlock(body, env, frame);
-            } catch (ReturnSignal signal) {
-                result = signal.value;
-            } catch (RuntimeException failure) {
-                bodyFailure = failure;
-            }
-
-            RuntimeException deferFailure = drainDeferred(frame);
-            RuntimeException failure;
-            if (bodyFailure instanceof java.util.concurrent.CancellationException) {
-                failure = bodyFailure;
-                if (deferFailure != null && deferFailure != failure) failure.addSuppressed(deferFailure);
-            } else if (deferFailure instanceof java.util.concurrent.CancellationException) {
-                failure = deferFailure;
-                if (bodyFailure != null && bodyFailure != failure) failure.addSuppressed(bodyFailure);
-            } else {
-                failure = bodyFailure;
-                if (failure != null && deferFailure != null) failure.addSuppressed(deferFailure);
-                else if (failure == null) failure = deferFailure;
-            }
-
-            if (failure != null) {
-                if (isNonRecoverable(failure)) throw failure;
-                RecoveryResult recovered = recoverFailure(frame, failure);
-                if (recovered.recovered()) return recovered.value();
-                throw recovered.failure();
-            }
-            return result;
+                executeBlock(method.body(), env);
+                return null;
+            } catch (ReturnSignal signal) { return signal.value; }
         }
 
-        private RecoveryResult recoverFailure(CallFrame frame, RuntimeException failure) {
-            RuntimeException current = failure;
-            while (!frame.recoverers.isEmpty()) {
-                Invokable recoverer = frame.recoverers.pop();
+        private void executeBlock(List<Ast.Stmt> statements, Env parent) {
+            Env env = new Env(parent);
+            ArrayDeque<Ast.Expr> deferred = new ArrayDeque<>();
+            Throwable pending = null;
+            try {
+                for (Ast.Stmt stmt : statements) executeStatement(stmt, env, deferred);
+            } catch (Throwable failure) {
+                pending = failure;
+            }
+
+            Throwable cleanupFailure = null;
+            while (!deferred.isEmpty()) {
                 try {
-                    return RecoveryResult.recovered(recoverer.call(List.of(failureValue(current))));
-                } catch (RuntimeException next) {
-                    if (next != current) next.addSuppressed(current);
-                    current = next;
-                }
-            }
-            return RecoveryResult.unrecovered(current);
-        }
-
-        private boolean isNonRecoverable(RuntimeException failure) {
-            return failure instanceof java.util.concurrent.CancellationException
-                    || failure instanceof SecurityException;
-        }
-
-        private Object failureValue(RuntimeException failure) {
-            return failure instanceof PanicSignal panic ? panic.value : failure;
-        }
-
-        private RuntimeException drainDeferred(CallFrame frame) {
-            RuntimeException firstFailure = null;
-            while (!frame.deferred.isEmpty()) {
-                try {
-                    frame.deferred.pop().call(List.of());
-                } catch (RuntimeException failure) {
-                    if (firstFailure == null) {
-                        firstFailure = failure;
-                    } else if (failure instanceof java.util.concurrent.CancellationException
-                            && !(firstFailure instanceof java.util.concurrent.CancellationException)) {
-                        failure.addSuppressed(firstFailure);
-                        firstFailure = failure;
+                    eval(deferred.pop(), env);
+                } catch (VirtualMachineError fatalCleanupFailure) {
+                    if (pending != null) fatalCleanupFailure.addSuppressed(pending);
+                    if (cleanupFailure != null) fatalCleanupFailure.addSuppressed(cleanupFailure);
+                    throw fatalCleanupFailure;
+                } catch (Throwable failure) {
+                    if (failure instanceof ExecutionTerminated || failure instanceof Error) {
+                        if (cleanupFailure != null) failure.addSuppressed(cleanupFailure);
+                        cleanupFailure = failure;
+                    } else if (cleanupFailure == null) {
+                        cleanupFailure = failure;
                     } else {
-                        firstFailure.addSuppressed(failure);
+                        cleanupFailure.addSuppressed(failure);
                     }
                 }
             }
-            return firstFailure;
+
+            if (pending instanceof ExecutionTerminated || pending instanceof Error) {
+                if (cleanupFailure != null) pending.addSuppressed(cleanupFailure);
+                throwUnchecked(pending);
+            }
+            if (cleanupFailure != null) {
+                if (pending != null) cleanupFailure.addSuppressed(pending);
+                throwUnchecked(cleanupFailure);
+            }
+            if (pending != null) throwUnchecked(pending);
         }
 
-        private void executeBlock(List<Ast.Stmt> statements, Env parent, CallFrame frame) {
-            Env env = new Env(parent);
-            for (Ast.Stmt stmt : statements) executeStatement(stmt, env, frame);
-        }
-
-        private void executeStatement(Ast.Stmt stmt, Env env, CallFrame frame) {
+        private void executeStatement(Ast.Stmt stmt, Env env, ArrayDeque<Ast.Expr> deferred) {
             if (stmt instanceof Ast.BindingStmt binding) {
                 if (binding.initializer() instanceof Ast.LambdaExpr) {
                     env.reserve(binding.name(), binding.kind());
@@ -249,111 +478,80 @@ public final class OresEvalRootNode extends RootNode {
                 return;
             }
             if (stmt instanceof Ast.ReturnStmt ret) throw new ReturnSignal(ret.value() == null ? null : eval(ret.value(), env));
-            if (stmt instanceof Ast.BreakStmt) throw BreakSignal.INSTANCE;
-            if (stmt instanceof Ast.ContinueStmt) throw ContinueSignal.INSTANCE;
             if (stmt instanceof Ast.ExprStmt expression) { eval(expression.expression(), env); return; }
-            if (stmt instanceof Ast.DeferStmt defer) {
-                Object produced = eval(defer.expression(), env);
-                if (!(produced instanceof Invokable action)) {
-                    throw new IllegalArgumentException(
-                            "defer operand must evaluate immediately to an arity-0 callable; got " + produced);
-                }
-                frame.deferred.push(action);
-                return;
-            }
-            if (stmt instanceof Ast.RecoverStmt recover) {
-                Object produced = eval(recover.handler(), env);
-                if (!(produced instanceof Invokable handler)) {
-                    throw new IllegalArgumentException(
-                            "recover handler must evaluate immediately to an arity-1 callable; got " + produced);
-                }
-                frame.recoverers.push(handler);
-                return;
-            }
-            if (stmt instanceof Ast.PanicStmt panic) {
-                throw new PanicSignal(eval(panic.value(), env));
-            }
+            if (stmt instanceof Ast.DeferStmt defer) { deferred.push(defer.expression()); return; }
             if (stmt instanceof Ast.IfStmt ifStmt) {
                 for (Ast.IfBranch branch : ifStmt.branches()) {
-                    if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env, frame); return; }
+                    if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env); return; }
                 }
-                executeBlock(ifStmt.elseBody(), env, frame);
+                executeBlock(ifStmt.elseBody(), env);
                 return;
             }
             if (stmt instanceof Ast.TryStmt tried) {
-                RuntimeException pending = null;
-
+                Throwable pending = null;
                 try {
+                    executeBlock(tried.body(), env);
+                } catch (ReturnSignal signal) {
+                    pending = signal;
+                } catch (ExecutionTerminated signal) {
+                    pending = signal;
+                } catch (RuntimeException failure) {
+                    Env catchEnv = new Env(env);
+                    catchEnv.define(tried.errorName(), failure, Ast.BindingKind.VAL);
                     try {
-                        executeBlock(tried.body(), env, frame);
-                    } catch (ReturnSignal signal) {
-                        throw signal;
-                    } catch (BreakSignal | ContinueSignal signal) {
-                        throw signal;
-                    } catch (java.util.concurrent.CancellationException cancellation) {
-                        throw cancellation;
-                    } catch (RuntimeException failure) {
-                        Env catchEnv = new Env(env);
-                        catchEnv.define(tried.errorName(), failureValue(failure), Ast.BindingKind.VAL);
-                        executeBlock(tried.catchBody(), catchEnv, frame);
+                        executeBlock(tried.catchBody(), catchEnv);
+                    } catch (Throwable catchFailure) {
+                        pending = catchFailure;
                     }
-                } catch (RuntimeException escaping) {
-                    pending = escaping;
+                } catch (Error fatal) {
+                    pending = fatal;
                 }
 
-                RuntimeException finalFailure = null;
+                if (pending instanceof ExecutionTerminated || pending instanceof Error) {
+                    try {
+                        executeBlock(tried.finallyBody(), env);
+                    } catch (VirtualMachineError fatalCleanupFailure) {
+                        fatalCleanupFailure.addSuppressed(pending);
+                        throw fatalCleanupFailure;
+                    } catch (Throwable cleanupFailure) {
+                        pending.addSuppressed(cleanupFailure);
+                    }
+                    throwUnchecked(pending);
+                }
+
                 try {
-                    executeBlock(tried.finallyBody(), env, frame);
-                } catch (RuntimeException escapingFinally) {
-                    finalFailure = escapingFinally;
+                    executeBlock(tried.finallyBody(), env);
+                } catch (Throwable finallyFailure) {
+                    throwUnchecked(finallyFailure);
                 }
-
-                if (pending instanceof java.util.concurrent.CancellationException) {
-                    if (finalFailure != null && finalFailure != pending) pending.addSuppressed(finalFailure);
-                    throw pending;
-                }
-                if (finalFailure instanceof java.util.concurrent.CancellationException) {
-                    if (pending != null && pending != finalFailure) finalFailure.addSuppressed(pending);
-                    throw finalFailure;
-                }
-                if (finalFailure != null) {
-                    if (pending != null && pending != finalFailure) finalFailure.addSuppressed(pending);
-                    throw finalFailure;
-                }
-                if (pending != null) throw pending;
+                if (pending != null) throwUnchecked(pending);
                 return;
             }
             if (stmt instanceof Ast.ForOfStmt loop) {
                 Object iterable = eval(loop.iterable(), env);
-                for (Object item : iterableValues(iterable)) {
+                for (Object item : iterableValues(iterable, env.singletonState)) {
                     context.schedulerSafepoint();
                     Env iteration = new Env(env);
                     iteration.define(loop.bindingName(), item, loop.bindingKind());
-                    try {
-                        executeBlock(loop.body(), iteration, frame);
-                    } catch (ContinueSignal ignored) {
-                        continue;
-                    } catch (BreakSignal ignored) {
-                        break;
-                    }
+                    executeBlock(loop.body(), iteration);
                 }
                 return;
             }
             if (stmt instanceof Ast.ForStmt loop) {
                 Env loopEnv = new Env(env);
-                if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, frame);
+                if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, new ArrayDeque<>());
                 while (loop.condition() == null || truth(eval(loop.condition(), loopEnv))) {
                     context.schedulerSafepoint();
-                    try {
-                        executeBlock(loop.body(), loopEnv, frame);
-                    } catch (ContinueSignal ignored) {
-                        // C-style for semantics: continue still runs the update expression.
-                    } catch (BreakSignal ignored) {
-                        break;
-                    }
+                    executeBlock(loop.body(), loopEnv);
                     if (loop.update() != null) eval(loop.update(), loopEnv);
                 }
             }
+        }
+
+        private static void throwUnchecked(Throwable failure) {
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            throw new IllegalStateException("unexpected checked guest failure", failure);
         }
 
         private Object eval(Ast.Expr expr, Env env) {
@@ -377,11 +575,39 @@ public final class OresEvalRootNode extends RootNode {
                 };
                 if (name.name().equals("None")) return new OptionValue(false, null);
                 Ast.ModuleDecl module = modules.get(name.name());
-                if (module != null) return new ModuleFacade(module);
+                if (module != null) {
+                    SingletonState localState = env.singletonState != null
+                            && env.singletonState.key.equals(singletonKey(module))
+                            ? env.singletonState
+                            : null;
+                    return new ModuleFacade(module, localState);
+                }
                 Ast.ClassDecl klass = findClass(name.name());
-                if (klass != null) return new ClassFacade(klass);
+                if (klass != null) {
+                    Ast.ModuleDecl owner = ownerModule(klass);
+                    if (owner != null && owner.singleton()
+                            && (env.singletonState == null
+                            || !env.singletonState.key.equals(singletonKey(owner)))) {
+                        throw new IllegalArgumentException("class '" + klass.name()
+                                + "' is actor-private inside singleton module '" + owner.name() + "'");
+                    }
+                    return new ClassFacade(klass, env.singletonState);
+                }
                 Ast.FunctionDecl fn = findFunction(name.name());
-                if (fn != null) return (Invokable) args -> callFunction(fn, args);
+                if (fn != null) {
+                    Ast.ModuleDecl owner = ownerModule(fn);
+                    if (owner != null && owner.singleton()) {
+                        if (env.singletonState != null && env.singletonState.key.equals(singletonKey(owner))) {
+                            return (Invokable) args -> callSingletonFunction(env.singletonState, fn, normalizeArgs(fn, args));
+                        }
+                        if (fn.visibility() != Ast.Visibility.PUBLIC) {
+                            throw new IllegalArgumentException("private singleton callable '" + owner.name() + "."
+                                    + fn.name() + "' is actor-private");
+                        }
+                        return (Invokable) args -> callSingleton(owner, fn, normalizeArgs(fn, args));
+                    }
+                    return (Invokable) args -> callFunctionDirect(fn, normalizeArgs(fn, args));
+                }
                 throw new IllegalArgumentException("unknown name " + name.name());
             }
             if (expr instanceof Ast.AssignExpr assignment) {
@@ -393,8 +619,23 @@ public final class OresEvalRootNode extends RootNode {
                 if (assignment.target() instanceof Ast.MemberExpr target) {
                     Object receiver = eval(target.receiver(), env);
                     if (receiver instanceof OresObject object) {
-                        if (!object.fields.containsKey(target.member())) throw new IllegalArgumentException("unknown field " + target.member());
+                        Ast.ClassDecl fieldClass = runtimeDispatchClass(object, env.singletonState);
+                        Ast.FieldDecl field = runtimeField(fieldClass, target.member());
+                        if (field == null || !object.fields.containsKey(target.member())) {
+                            throw new IllegalArgumentException("unknown field " + target.member());
+                        }
+                        if (field.bindingKind() != Ast.BindingKind.LET) {
+                            throw new IllegalArgumentException("field '" + object.classId + "."
+                                    + target.member() + "' is immutable");
+                        }
+                        Object previous = object.fields.get(target.member());
                         object.fields.put(target.member(), value);
+                        try {
+                            if (env.singletonState != null) env.singletonState.validateStorageGraph();
+                        } catch (RuntimeException | Error failure) {
+                            object.fields.put(target.member(), previous);
+                            throw failure;
+                        }
                         return value;
                     }
                     throw new IllegalArgumentException("member assignment requires a class instance");
@@ -406,7 +647,13 @@ public final class OresEvalRootNode extends RootNode {
                     int i = Math.toIntExact(number.longValue());
                     if (receiver instanceof List<?> raw) {
                         @SuppressWarnings("unchecked") List<Object> list = (List<Object>) raw;
-                        list.set(i, value);
+                        Object previous = list.set(i, value);
+                        try {
+                            if (env.singletonState != null) env.singletonState.validateStorageGraph();
+                        } catch (RuntimeException | Error failure) {
+                            list.set(i, previous);
+                            throw failure;
+                        }
                         return value;
                     }
                     throw new IllegalArgumentException("indexed assignment requires a mutable array/list");
@@ -436,12 +683,28 @@ public final class OresEvalRootNode extends RootNode {
                     Object receiver = eval(methodCall.receiver(), env);
                     List<Object> args = call.arguments().stream().map(arg -> eval(arg, env)).toList();
                     if (receiver instanceof OresObject object) {
-                        return invokeMethod(object, methodCall.member(), args);
+                        return invokeMethod(object, methodCall.member(), args, env.singletonState);
+                    }
+                    if (receiver instanceof SingletonObjectProxy proxy) {
+                        return invokeSingletonProxy(proxy, methodCall.member(), args);
                     }
                     if (receiver instanceof ClassFacade klass) {
-                        return invokeStaticFunction(klass.klass(), methodCall.member(), args);
+                        return invokeStaticFunction(klass.klass(), methodCall.member(), args, klass.localState());
                     }
-                    Object callee = member(receiver, methodCall.member());
+                    if (receiver instanceof ModuleFacade moduleFacade) {
+                        Ast.FunctionDecl function = publicModuleFunction(
+                                moduleFacade.module(), methodCall.member(), args.size());
+                        if (function != null) {
+                            if (moduleFacade.module().singleton()) {
+                                if (moduleFacade.localState() != null) {
+                                    return callSingletonFunction(moduleFacade.localState(), function, normalizeArgs(function, args));
+                                }
+                                return callSingleton(moduleFacade.module(), function, normalizeArgs(function, args));
+                            }
+                            return callFunctionDirect(function, normalizeArgs(function, args));
+                        }
+                    }
+                    Object callee = member(receiver, methodCall.member(), env.singletonState);
                     if (!(callee instanceof Invokable invokable)) throw new IllegalArgumentException("value is not callable: " + callee);
                     return invokable.call(args);
                 }
@@ -450,7 +713,7 @@ public final class OresEvalRootNode extends RootNode {
                 if (!(callee instanceof Invokable invokable)) throw new IllegalArgumentException("value is not callable: " + callee);
                 return invokable.call(args);
             }
-            if (expr instanceof Ast.MemberExpr member) return member(eval(member.receiver(), env), member.member());
+            if (expr instanceof Ast.MemberExpr member) return member(eval(member.receiver(), env), member.member(), env.singletonState);
             if (expr instanceof Ast.IndexExpr indexed) {
                 Object receiver = eval(indexed.receiver(), env);
                 Object index = eval(indexed.index(), env);
@@ -463,6 +726,13 @@ public final class OresEvalRootNode extends RootNode {
             if (expr instanceof Ast.NewExpr created) {
                 Ast.ClassDecl klass = findClass(created.type().name());
                 if (klass == null) throw new IllegalArgumentException("unknown class " + created.type().name());
+                Ast.ModuleDecl owner = ownerModule(klass);
+                if (owner != null && owner.singleton()
+                        && (env.singletonState == null
+                        || !env.singletonState.key.equals(singletonKey(owner)))) {
+                    throw new IllegalArgumentException("class '" + klass.name()
+                            + "' is actor-private inside singleton module '" + owner.name() + "'");
+                }
                 List<Object> args = created.arguments().stream().map(arg -> eval(arg, env)).toList();
                 List<Ast.FieldDecl> classFields = effectiveFields(klass, new LinkedHashSet<>());
                 if (args.size() > classFields.size()) throw new IllegalArgumentException("too many constructor arguments for " + klass.name());
@@ -475,11 +745,14 @@ public final class OresEvalRootNode extends RootNode {
                     else throw new IllegalArgumentException("missing constructor field " + klass.name() + "." + field.name());
                     fields.put(field.name(), value);
                 }
-                return new OresObject(klass, fields);
+                return new OresObject(runtimeClassId(klass), fields);
             }
             if (expr instanceof Ast.AwaitExpr awaited) {
                 Object value = eval(awaited.expression(), env);
-                if (value instanceof CompletionStage<?> stage) return stage.toCompletableFuture().join();
+                if (value instanceof CompletionStage<?> stage) {
+                    Object frozen = stage.toCompletableFuture().join();
+                    return ActorRuntime.materializeOwned(frozen);
+                }
                 return value;
             }
             if (expr instanceof Ast.ListExpr list) {
@@ -495,25 +768,6 @@ public final class OresEvalRootNode extends RootNode {
                 }
                 return Map.copyOf(result);
             }
-            if (expr instanceof Ast.ActorExpr actor) {
-                Ast.LambdaExpr behavior = actor.behavior();
-                if (behavior.parameters().size() != 1) {
-                    throw new IllegalArgumentException("actor behavior requires exactly one mailbox message parameter");
-                }
-                Env captured = env.snapshot();
-                Ast.Param messageParam = behavior.parameters().getFirst();
-                ActorRuntime.ActorKind kind = actor.mode() == Ast.ActorMode.ISOLATE
-                        ? ActorRuntime.ActorKind.ISOLATE
-                        : ActorRuntime.ActorKind.SHARED;
-
-                return context.actors().spawn(kind, () -> (message, actorContext) -> {
-                    Env local = new Env(captured);
-                    local.define("self", actorContext.self(), Ast.BindingKind.VAL);
-                    local.define(messageParam.name(), message,
-                            messageParam.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
-                    executeCallableBody(behavior.blockBody(), local);
-                });
-            }
             if (expr instanceof Ast.LambdaExpr lambda) {
                 Env captured = env.snapshot();
                 return (Invokable) args -> {
@@ -524,13 +778,14 @@ public final class OresEvalRootNode extends RootNode {
                         local.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
                     }
                     if (lambda.expressionBody() != null) return eval(lambda.expressionBody(), local);
-                    return executeCallableBody(lambda.blockBody(), local);
+                    try { executeBlock(lambda.blockBody(), local); return null; }
+                    catch (ReturnSignal signal) { return signal.value; }
                 };
             }
             throw new IllegalArgumentException("unsupported expression " + expr);
         }
 
-        private Object member(Object receiver, String name) {
+        private Object member(Object receiver, String name, SingletonState singletonState) {
             if (receiver instanceof StdioFacade stdio) {
                 return switch (name) {
                     case "print" -> (Invokable) stdio::print;
@@ -554,63 +809,23 @@ public final class OresEvalRootNode extends RootNode {
                     default -> throw new IllegalArgumentException("unknown process member " + name);
                 };
             }
-            if (receiver instanceof ActorTaskValue task) {
-                ActorRuntime.ActorRef<?> actor = task.ref();
-                return switch (name) {
-                    case "stop" -> (Invokable) args -> {
-                        requireZero(args, "actor-task.stop");
-                        actor.stop();
-                        return null;
-                    };
-                    case "join" -> (Invokable) args -> {
-                        requireZero(args, "actor-task.join");
-                        actor.join();
-                        return null;
-                    };
-                    case "alive" -> actor.isAlive();
-                    case "failed" -> actor.failed();
-                    case "kind" -> actor.kind().name().toLowerCase();
-                    default -> throw new IllegalArgumentException("unknown ActorTask member " + name);
-                };
-            }
-            if (receiver instanceof ActorRuntime.ActorRef<?> actor) {
-                return switch (name) {
-                    case "send" -> (Invokable) args -> {
-                        requireOne(args, "actor.send");
-                        @SuppressWarnings("unchecked")
-                        ActorRuntime.ActorRef<Object> typed = (ActorRuntime.ActorRef<Object>) actor;
-                        typed.send(args.getFirst());
-                        return null;
-                    };
-                    case "stop" -> (Invokable) args -> {
-                        requireZero(args, "actor.stop");
-                        actor.stop();
-                        return null;
-                    };
-                    case "join" -> (Invokable) args -> {
-                        requireZero(args, "actor.join");
-                        actor.join();
-                        return null;
-                    };
-                    case "alive" -> actor.isAlive();
-                    case "failed" -> actor.failed();
-                    case "kind" -> actor.kind().name().toLowerCase();
-                    default -> throw new IllegalArgumentException("unknown actor member " + name);
-                };
-            }
-            if (receiver instanceof ModuleFacade namespace) return moduleMember(namespace.module, name);
+            if (receiver instanceof ModuleFacade namespace) return moduleMember(namespace, name);
             if (receiver instanceof ClassFacade klass) {
                 List<Ast.MethodDecl> functions = findStaticFunctionsByName(klass.klass(), name, new LinkedHashSet<>());
                 if (functions.size() == 1) {
                     Ast.MethodDecl fn = functions.getFirst();
-                    return (Invokable) args -> callStaticFunction(klass.klass(), fn, args);
+                    return (Invokable) args -> callStaticFunction(klass.klass(), fn, args, klass.localState());
                 }
                 if (functions.size() > 1) throw new IllegalArgumentException("overloaded static function " + klass.klass().name() + "." + name + " must be called so arity can select it");
                 throw new IllegalArgumentException("unknown static member " + klass.klass().name() + "." + name);
             }
+            if (receiver instanceof SingletonObjectProxy proxy) {
+                throw new IllegalArgumentException("singleton object proxy members must be invoked directly and awaited: "
+                        + proxy.module().name() + "." + proxy.fieldName() + "." + name + "(...)");
+            }
             if (receiver instanceof OresObject object) {
                 if (object.fields.containsKey(name)) return object.fields.get(name);
-                return new BoundMethod(object, name);
+                return new BoundMethod(object, name, singletonState);
             }
             if (receiver instanceof Map<?, ?> map) {
                 if (!map.containsKey(name)) throw new IllegalArgumentException("unknown obj member " + name);
@@ -619,27 +834,94 @@ public final class OresEvalRootNode extends RootNode {
             throw new IllegalArgumentException("cannot access member '" + name + "' on " + receiver);
         }
 
-        private Object invokeMethod(OresObject receiver, String name, List<Object> args) {
-            Ast.MethodDecl method = findMethod(receiver.klass, name, args.size(), new LinkedHashSet<>());
-            if (method == null) throw new IllegalArgumentException("no method " + receiver.klass.name() + "." + name + " with arity " + args.size());
-            return callMethod(receiver, method, args);
+        private Object invokeMethod(OresObject receiver, String name, List<Object> args, SingletonState singletonState) {
+            Ast.ClassDecl dispatchClass = runtimeDispatchClass(receiver, singletonState);
+            Ast.MethodDecl method = findMethod(dispatchClass, name, args.size(), new LinkedHashSet<>());
+            if (method == null) throw new IllegalArgumentException("no method " + dispatchClass.name() + "." + name + " with arity " + args.size());
+            return callMethod(receiver, dispatchClass, method, args, singletonState);
         }
 
-        private Object invokeStaticFunction(Ast.ClassDecl klass, String name, List<Object> args) {
+        private Ast.ClassDecl runtimeDispatchClass(OresObject receiver, SingletonState singletonState) {
+            Ast.ClassDecl current = findClass(receiver.classId);
+            if (current == null) {
+                String kind = singletonState == null ? "runtime" : "singleton-owned";
+                throw new IllegalStateException(kind + " class '" + receiver.classId
+                        + "' no longer exists in the active code generation");
+            }
+            return current;
+        }
+
+        private CompletionStage<Object> invokeSingletonProxy(
+                SingletonObjectProxy proxy,
+                String methodName,
+                List<Object> args) {
+            ProcessSingletonRegistry.Handle<SingletonState> handle = singletonHandle(proxy.module());
+            return handle.call(
+                    args,
+                    context.isolatePolicy().maxMailboxMessages(),
+                    context.isolatePolicy().maxWallTime(),
+                    (state, frozenArgs) -> transactionalSingletonCall(state, working -> {
+                        String currentSchema = singletonSchema(proxy.module());
+                        if (!working.schema.equals(currentSchema)) {
+                            throw new IllegalStateException("singleton module state schema changed for "
+                                    + proxy.module().name()
+                                    + "; process-lifetime state cannot be reinterpreted without an explicit migration");
+                        }
+                        authorizeSingletonCodeGeneration(working, proxy.module());
+                        Object value = working.fields.lookup(proxy.fieldName());
+                        if (!(value instanceof OresObject object)
+                                || !object.classId.equals(runtimeClassId(proxy.klass()))) {
+                            throw new IllegalStateException("singleton object proxy target changed for "
+                                    + proxy.module().name() + "." + proxy.fieldName());
+                        }
+
+                        // The object state survives hot reload, but behavior is
+                        // selected from the currently authorized code generation.
+                        Ast.MethodDecl method = findMethod(proxy.klass(), methodName, frozenArgs.size(), new LinkedHashSet<>());
+                        if (method == null || method.visibility() != Ast.Visibility.PUBLIC) {
+                            throw new IllegalArgumentException("no public singleton proxy method "
+                                    + proxy.klass().name() + "." + methodName + " with arity " + frozenArgs.size());
+                        }
+                        return callMethod(object, proxy.klass(), method, frozenArgs, working);
+                    }));
+        }
+
+        private Env classLexicalModuleState(Ast.ClassDecl klass, SingletonState singletonState) {
+            Ast.ModuleDecl owner = ownerModule(klass);
+            if (owner == null) return null;
+            if (owner.singleton()) {
+                if (singletonState == null || !singletonState.key.equals(singletonKey(owner))) {
+                    throw new IllegalArgumentException("class '" + klass.name()
+                            + "' is actor-private inside singleton module '" + owner.name() + "'");
+                }
+                return singletonState.fields;
+            }
+            // A class used as process-singleton state but declared outside that
+            // singleton must not capture the caller actor's module state.
+            if (singletonState != null) return null;
+            return actorModuleState(owner);
+        }
+
+        private Object invokeStaticFunction(Ast.ClassDecl klass, String name, List<Object> args, SingletonState singletonState) {
             Ast.MethodDecl fn = findStaticFunction(klass, name, args.size(), new LinkedHashSet<>());
             if (fn == null) throw new IllegalArgumentException("no static function " + klass.name() + "." + name + " with arity " + args.size());
-            return callStaticFunction(klass, fn, args);
+            return callStaticFunction(klass, fn, args, singletonState);
         }
 
-        private Object callStaticFunction(Ast.ClassDecl klass, Ast.MethodDecl fn, List<?> args) {
+        private Object callStaticFunction(Ast.ClassDecl klass, Ast.MethodDecl fn, List<?> args, SingletonState singletonState) {
+            if (singletonState != null) ProcessSingletonRegistry.checkExecutionBudget();
             if (!fn.isStatic()) throw new IllegalArgumentException("not a static class function: " + klass.name() + "." + fn.name());
             if (args.size() != fn.parameters().size()) throw new IllegalArgumentException("static function " + fn.name() + " arity mismatch");
-            Env env = new Env(null);
+            Env lexical = classLexicalModuleState(klass, singletonState);
+            Env env = new Env(lexical, singletonState);
             for (int i = 0; i < fn.parameters().size(); i++) {
                 Ast.Param param = fn.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(fn.body(), env);
+            try {
+                executeBlock(fn.body(), env);
+                return null;
+            } catch (ReturnSignal signal) { return signal.value; }
         }
 
         /**
@@ -651,28 +933,77 @@ public final class OresEvalRootNode extends RootNode {
         private final class BoundMethod implements Invokable {
             private final OresObject receiver;
             private final String methodName;
+            private final SingletonState singletonState;
 
-            private BoundMethod(OresObject receiver, String methodName) {
+            private BoundMethod(OresObject receiver, String methodName, SingletonState singletonState) {
                 this.receiver = receiver;
                 this.methodName = methodName;
+                this.singletonState = singletonState;
             }
 
             @Override public Object call(List<Object> arguments) {
-                return invokeMethod(receiver, methodName, arguments);
+                return invokeMethod(receiver, methodName, arguments, singletonState);
             }
         }
 
-        private Object moduleMember(Ast.ModuleDecl module, String name) {
+        private Ast.FunctionDecl publicModuleFunction(Ast.ModuleDecl module, String name, int arity) {
+            for (Ast.Decl decl : module.declarations()) {
+                if (decl instanceof Ast.FunctionDecl fn
+                        && fn.visibility() == Ast.Visibility.PUBLIC
+                        && fn.name().equals(name)
+                        && fn.parameters().size() == arity) {
+                    return fn;
+                }
+            }
+            return null;
+        }
+
+        private Ast.FieldDecl runtimeField(Ast.ClassDecl klass, String name) {
+            for (Ast.FieldDecl field : effectiveFields(klass, new LinkedHashSet<>())) {
+                if (field.name().equals(name)) return field;
+            }
+            return null;
+        }
+
+        private Object moduleMember(ModuleFacade facade, String name) {
+            Ast.ModuleDecl module = facade.module();
             for (Ast.Decl decl : module.declarations()) {
                 if (decl instanceof Ast.ClassDecl klass && klass.name().equals(name)) {
-                    return new ClassFacade(klass);
+                    if (module.singleton() && facade.localState() == null) {
+                        throw new IllegalArgumentException("classes inside singleton module '" + module.name()
+                                + "' are actor-private and cannot be accessed through its external proxy");
+                    }
+                    return new ClassFacade(klass, facade.localState());
                 }
                 if (decl instanceof Ast.FunctionDecl fn && fn.name().equals(name) && fn.visibility() == Ast.Visibility.PUBLIC) {
-                    return (Invokable) args -> callFunction(fn, args);
+                    if (module.singleton()) {
+                        if (facade.localState() != null) {
+                            return (Invokable) args -> callSingletonFunction(
+                                    facade.localState(), fn, normalizeArgs(fn, args));
+                        }
+                        throw new IllegalArgumentException("singleton service function values cannot be extracted; call and await "
+                                + module.name() + "." + name + "(...) directly");
+                    }
+                    return (Invokable) args -> callFunctionDirect(fn, normalizeArgs(fn, args));
                 }
                 if (decl instanceof Ast.FieldDecl field && field.name().equals(name) && field.visibility() == Ast.Visibility.PUBLIC) {
-                    if (field.initializer() == null) throw new IllegalArgumentException("module field has no initializer: " + module.name() + "." + name);
-                    return eval(field.initializer(), new Env(null));
+                    if (module.singleton()) {
+                        if (facade.localState() != null) {
+                            Object local = facade.localState().fields.lookup(name);
+                            if (local == Env.MISSING) throw new IllegalStateException("missing singleton field " + module.name() + "." + name);
+                            return local;
+                        }
+                        Ast.ClassDecl klass = field.type() == null ? null : findClass(field.type().name());
+                        if (klass == null) {
+                            throw new IllegalArgumentException("singleton module exports only class-instance proxy fields: "
+                                    + module.name() + "." + name);
+                        }
+                        return new SingletonObjectProxy(module, field.name(), klass);
+                    }
+                    Env state = actorModuleState(module);
+                    Object value = state.lookup(name);
+                    if (value == Env.MISSING) throw new IllegalStateException("missing actor-local module field " + module.name() + "." + name);
+                    return value;
                 }
             }
             throw new IllegalArgumentException("module '" + module.name() + "' does not export '" + name + "'");
@@ -752,14 +1083,15 @@ public final class OresEvalRootNode extends RootNode {
             return List.copyOf(result.values());
         }
 
-        private List<?> iterableValues(Object value) {
+        private List<?> iterableValues(Object value, SingletonState singletonState) {
             if (value instanceof List<?> list) return list;
             if (value instanceof Object[] array) return List.of(array);
             if (value instanceof OresObject object) {
-                Ast.MethodDecl iterator = findMethod(object.klass, "Symbol.iterator", 0, new LinkedHashSet<>());
+                Ast.ClassDecl dispatchClass = runtimeDispatchClass(object, singletonState);
+                Ast.MethodDecl iterator = findMethod(dispatchClass, "Symbol.iterator", 0, new LinkedHashSet<>());
                 if (iterator == null) throw new IllegalArgumentException("value has no [Symbol.iterator]()");
-                Object produced = callMethod(object, iterator, List.of());
-                return iterableValues(produced);
+                Object produced = callMethod(object, dispatchClass, iterator, List.of(), singletonState);
+                return iterableValues(produced, singletonState);
             }
             throw new IllegalArgumentException("value is not iterable");
         }
@@ -799,7 +1131,7 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object negate(Object value) {
-            if (value instanceof Complex c) return new Complex(-c.real, -c.imaginary);
+            if (value instanceof Complex c) return c.negate();
             if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) return -((Number) value).longValue();
             if (value instanceof Number number) return -number.doubleValue();
             throw new IllegalArgumentException("unary - requires a number");
@@ -819,28 +1151,239 @@ public final class OresEvalRootNode extends RootNode {
     }
 
     @FunctionalInterface private interface Invokable { Object call(List<Object> arguments); }
+    @FunctionalInterface private interface SingletonWork { Object apply(SingletonState state); }
 
-    private static final class CallFrame {
-        private final ArrayDeque<Invokable> deferred = new ArrayDeque<>();
-        private final ArrayDeque<Invokable> recoverers = new ArrayDeque<>();
+    private static final class SingletonState {
+        private final String key;
+        private final String schema;
+        private final Env fields;
+        private String activeCodeDigest;
+        private long activeGeneration;
+
+        private SingletonState(String key, String schema, String activeCodeDigest, long activeGeneration) {
+            this.key = key;
+            this.schema = schema;
+            this.activeCodeDigest = activeCodeDigest;
+            this.activeGeneration = activeGeneration;
+            this.fields = new Env(null, this, true);
+        }
+
+        private SingletonState transactionalCopy() {
+            SingletonState copy = new SingletonState(
+                    key, schema, activeCodeDigest, activeGeneration);
+            IdentityHashMap<Object, Object> copied = new IdentityHashMap<>();
+            for (Map.Entry<String, Slot> entry : fields.slots.entrySet()) {
+                Slot slot = entry.getValue();
+                Object value = slot.value == Env.MISSING
+                        ? Env.MISSING
+                        : copySingletonValue(slot.value, copied);
+                copy.fields.slots.put(entry.getKey(), new Slot(value, slot.kind));
+            }
+            return copy;
+        }
+
+        private void commitFrom(SingletonState working) {
+            if (!key.equals(working.key) || !schema.equals(working.schema)) {
+                throw new IllegalStateException("cannot commit singleton transaction across identity/schema boundary");
+            }
+            working.validateStorageGraph();
+            fields.slots.clear();
+            fields.slots.putAll(working.fields.slots);
+            activeCodeDigest = working.activeCodeDigest;
+            activeGeneration = working.activeGeneration;
+        }
+
+        private void validateStorageGraph() {
+            LinkedHashMap<String, Object> graph = new LinkedHashMap<>();
+            IdentityHashMap<Object, Boolean> path = new IdentityHashMap<>();
+            for (Map.Entry<String, Slot> entry : fields.slots.entrySet()) {
+                if (entry.getValue().value == Env.MISSING) continue;
+                graph.put(entry.getKey(), singletonValidationValue(entry.getValue().value, path));
+            }
+            // One freeze budget applies to the whole process-owned state cell.
+            ActorRuntime.freeze(graph);
+        }
     }
 
-    private record RecoveryResult(boolean recovered, Object value, RuntimeException failure) {
-        private static RecoveryResult recovered(Object value) {
-            return new RecoveryResult(true, value, null);
+    private static Object copySingletonValue(
+            Object value,
+            IdentityHashMap<Object, Object> copies) {
+        if (value == null
+                || value instanceof String
+                || value instanceof Number
+                || value instanceof Boolean
+                || value instanceof Character
+                || value instanceof Complex) {
+            return value;
         }
-        private static RecoveryResult unrecovered(RuntimeException failure) {
-            return new RecoveryResult(false, null, failure);
+        Object existing = copies.get(value);
+        if (existing != null) return existing;
+
+        if (value instanceof OresObject object) {
+            LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
+            OresObject copy = new OresObject(object.classId, fields);
+            copies.put(value, copy);
+            for (Map.Entry<String, Object> entry : object.fields.entrySet()) {
+                fields.put(entry.getKey(), copySingletonValue(entry.getValue(), copies));
+            }
+            return copy;
         }
+        if (value instanceof OptionValue option) {
+            return option.present()
+                    ? new OptionValue(true, copySingletonValue(option.value(), copies))
+                    : option;
+        }
+        if (value instanceof List<?> list) {
+            ArrayList<Object> copy = new ArrayList<>(list.size());
+            copies.put(value, copy);
+            for (Object item : list) copy.add(copySingletonValue(item, copies));
+            return copy;
+        }
+        if (value instanceof Set<?> set) {
+            LinkedHashSet<Object> copy = new LinkedHashSet<>();
+            copies.put(value, copy);
+            for (Object item : set) copy.add(copySingletonValue(item, copies));
+            return copy;
+        }
+        if (value instanceof Map<?, ?> map) {
+            LinkedHashMap<Object, Object> copy = new LinkedHashMap<>();
+            copies.put(value, copy);
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                copy.put(
+                        copySingletonValue(entry.getKey(), copies),
+                        copySingletonValue(entry.getValue(), copies));
+            }
+            return copy;
+        }
+        if (value instanceof Object[] array) {
+            Object[] copy = new Object[array.length];
+            copies.put(value, copy);
+            for (int i = 0; i < array.length; i++) {
+                copy[i] = copySingletonValue(array[i], copies);
+            }
+            return copy;
+        }
+        // Validation will reject unsupported host values before commit.
+        return value;
+    }
+
+    private static Object singletonValidationValue(
+            Object value,
+            IdentityHashMap<Object, Boolean> path) {
+        if (value instanceof OresObject object) {
+            if (path.put(object, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("singleton state contains a cyclic class-instance graph");
+            }
+            try {
+                LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
+                fields.put("@class", object.classId);
+                for (Map.Entry<String, Object> entry : object.fields.entrySet()) {
+                    fields.put(entry.getKey(), singletonValidationValue(entry.getValue(), path));
+                }
+                return fields;
+            } finally {
+                path.remove(object);
+            }
+        }
+        if (value instanceof OptionValue option && option.present()) {
+            return new OptionValue(true, singletonValidationValue(option.value(), path));
+        }
+        if (value instanceof List<?> list) {
+            if (path.put(list, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("singleton state contains a cyclic list graph");
+            }
+            try {
+                ArrayList<Object> copy = new ArrayList<>(list.size());
+                for (Object item : list) copy.add(singletonValidationValue(item, path));
+                return copy;
+            } finally {
+                path.remove(list);
+            }
+        }
+        if (value instanceof Set<?> set) {
+            if (path.put(set, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("singleton state contains a cyclic set graph");
+            }
+            try {
+                LinkedHashSet<Object> copy = new LinkedHashSet<>();
+                for (Object item : set) {
+                    Object validated = singletonValidationValue(item, path);
+                    if (!copy.add(validated)) {
+                        throw new IllegalArgumentException(
+                                "singleton state set elements collide after validation");
+                    }
+                }
+                return copy;
+            } finally {
+                path.remove(set);
+            }
+        }
+        if (value instanceof Map<?, ?> map) {
+            if (path.put(map, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("singleton state contains a cyclic map graph");
+            }
+            try {
+                LinkedHashMap<Object, Object> copy = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    Object key = singletonValidationValue(entry.getKey(), path);
+                    Object mapped = singletonValidationValue(entry.getValue(), path);
+                    if (copy.containsKey(key)) {
+                        throw new IllegalArgumentException("singleton state map keys collide after validation");
+                    }
+                    copy.put(key, mapped);
+                }
+                return copy;
+            } finally {
+                path.remove(map);
+            }
+        }
+        if (value instanceof Object[] array) {
+            if (path.put(array, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("singleton state contains a cyclic array graph");
+            }
+            try {
+                ArrayList<Object> copy = new ArrayList<>(array.length);
+                for (Object item : array) copy.add(singletonValidationValue(item, path));
+                return copy;
+            } finally {
+                path.remove(array);
+            }
+        }
+        return value;
     }
 
     private static final class Env {
         private static final Object MISSING = new Object();
         private final Env parent;
-        private final Map<String, Slot> slots = new HashMap<>();
-        private Env(Env parent) { this.parent = parent; }
+        private final SingletonState singletonState;
+        private final boolean singletonStorage;
+        private final Map<String, Slot> slots = new LinkedHashMap<>();
+
+        private Env(Env parent) {
+            this(parent, parent == null ? null : parent.singletonState, false);
+        }
+
+        private Env(Env parent, SingletonState singletonState) {
+            this(parent, singletonState, false);
+        }
+
+        private Env(Env parent, SingletonState singletonState, boolean singletonStorage) {
+            this.parent = parent;
+            this.singletonState = singletonState;
+            this.singletonStorage = singletonStorage;
+        }
+
         private void define(String name, Object value, Ast.BindingKind kind) {
+            validateSingletonStorageValue(value);
             if (slots.putIfAbsent(name, new Slot(value, kind)) != null) throw new IllegalArgumentException("duplicate binding " + name);
+            if (singletonStorage) {
+                try {
+                    singletonState.validateStorageGraph();
+                } catch (RuntimeException | Error failure) {
+                    slots.remove(name);
+                    throw failure;
+                }
+            }
         }
         private void reserve(String name, Ast.BindingKind kind) {
             if (slots.putIfAbsent(name, new Slot(MISSING, kind)) != null) throw new IllegalArgumentException("duplicate binding " + name);
@@ -848,20 +1391,52 @@ public final class OresEvalRootNode extends RootNode {
         private void initialize(String name, Object value) {
             Slot slot = slots.get(name);
             if (slot == null) throw new IllegalArgumentException("unknown binding " + name);
+            validateSingletonStorageValue(value);
+            Object previous = slot.value;
             slot.value = value;
+            if (singletonStorage) {
+                try {
+                    singletonState.validateStorageGraph();
+                } catch (RuntimeException | Error failure) {
+                    slot.value = previous;
+                    throw failure;
+                }
+            }
         }
         private Object lookup(String name) { Slot s=slots.get(name); return s!=null?s.value:parent==null?MISSING:parent.lookup(name); }
         private void assign(String name, Object value) {
             Slot slot = slots.get(name);
             if (slot != null) {
                 if (slot.kind != Ast.BindingKind.LET) throw new IllegalArgumentException("cannot reassign " + slot.kind.name().toLowerCase() + " binding " + name);
+                validateSingletonStorageValue(value);
+                Object previous = slot.value;
                 slot.value = value;
+                if (singletonStorage) {
+                    try {
+                        singletonState.validateStorageGraph();
+                    } catch (RuntimeException | Error failure) {
+                        slot.value = previous;
+                        throw failure;
+                    }
+                }
                 return;
             }
             if (parent != null) { parent.assign(name, value); return; }
             throw new IllegalArgumentException("unknown binding " + name);
         }
-        private Env snapshot() { Env cp=new Env(parent==null?null:parent.snapshot()); cp.slots.putAll(slots); return cp; }
+        private void validateSingletonStorageValue(Object value) {
+            if (singletonStorage && value != MISSING) {
+                // Validate a detached representation; the actor keeps ownership
+                // of the mutable state itself.
+                ActorRuntime.freeze(singletonValidationValue(value, new IdentityHashMap<>()));
+            }
+        }
+
+        private Env snapshot() {
+            Env cp = new Env(parent == null ? null : parent.snapshot(), singletonState, singletonStorage);
+            cp.slots.putAll(slots);
+            return cp;
+        }
     }
 
     private static final class Slot {
@@ -875,46 +1450,26 @@ public final class OresEvalRootNode extends RootNode {
         private ReturnSignal(Object value) { super(null,null,false,false); this.value=value; }
     }
 
-    private static final class BreakSignal extends RuntimeException {
-        private static final BreakSignal INSTANCE = new BreakSignal();
-        private BreakSignal() { super(null, null, false, false); }
-    }
-
-    private static final class ContinueSignal extends RuntimeException {
-        private static final ContinueSignal INSTANCE = new ContinueSignal();
-        private ContinueSignal() { super(null, null, false, false); }
-    }
-
-    private static final class PanicSignal extends RuntimeException {
-        private final Object value;
-        private PanicSignal(Object value) {
-            super("panic: " + String.valueOf(value), null, true, false);
-            this.value = value;
-        }
-    }
-
-    private record Complex(double real, double imaginary) {
-        private Complex add(Complex o){return new Complex(real+o.real,imaginary+o.imaginary);}
-        private Complex sub(Complex o){return new Complex(real-o.real,imaginary-o.imaginary);}
-        private Complex mul(Complex o){return new Complex(real*o.real-imaginary*o.imaginary,real*o.imaginary+imaginary*o.real);}
-        private Complex div(Complex o){double d=o.real*o.real+o.imaginary*o.imaginary;return new Complex((real*o.real+imaginary*o.imaginary)/d,(imaginary*o.real-real*o.imaginary)/d);}
-        @Override public String toString(){return real+(imaginary<0?"":"+")+imaginary+"i";}
-    }
-
     private static final class OresObject {
-        private final Ast.ClassDecl klass; private final Map<String,Object> fields;
-        private OresObject(Ast.ClassDecl klass, Map<String,Object> fields){this.klass=klass;this.fields=fields;}
-        @Override public String toString(){return klass.name()+fields;}
+        private final String classId;
+        private final Map<String,Object> fields;
+
+        private OresObject(String classId, Map<String,Object> fields) {
+            this.classId = classId;
+            this.fields = fields;
+        }
+
+        @Override public String toString(){return classId+fields;}
     }
 
-    private record ModuleFacade(Ast.ModuleDecl module) { }
-    private record ClassFacade(Ast.ClassDecl klass) { }
-    private record ActorTaskValue(ActorRuntime.ActorRef<?> ref) implements ActorRuntime.Sendable {
-        @Override public Object freezeForSend() { return this; }
-    }
-    private record OptionValue(boolean present, Object value) {
-        @Override public String toString(){return present ? "Some(" + value + ")" : "None";}
-    }
+    private record ActorModuleStateKey(
+            String codeUnitId,
+            String namespace,
+            String moduleName,
+            String codeDigest) { }
+    private record ModuleFacade(Ast.ModuleDecl module, SingletonState localState) { }
+    private record ClassFacade(Ast.ClassDecl klass, SingletonState localState) { }
+    private record SingletonObjectProxy(Ast.ModuleDecl module, String fieldName, Ast.ClassDecl klass) { }
     private record StdioFacade(OresContext context) {
         private Object print(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.print");requireOne(args,"stdio.print");context.output().print(String.valueOf(args.getFirst()));context.output().flush();return null;}
         private Object println(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.println");requireOne(args,"stdio.println");context.output().println(String.valueOf(args.getFirst()));return null;}
@@ -929,5 +1484,4 @@ public final class OresEvalRootNode extends RootNode {
         private Object shareReadonly(List<Object> args){context.requireCapability(IsolatePolicy.Capability.ACTOR_SHARE_READONLY,"process.share_readonly");requireOne(args,"process.share_readonly");return context.actors().shareReadonly(args.getFirst());}
     }
     private static void requireOne(List<Object> args,String name){if(args.size()!=1)throw new IllegalArgumentException(name+" expects one argument");}
-    private static void requireZero(List<Object> args,String name){if(!args.isEmpty())throw new IllegalArgumentException(name+" expects no arguments");}
 }

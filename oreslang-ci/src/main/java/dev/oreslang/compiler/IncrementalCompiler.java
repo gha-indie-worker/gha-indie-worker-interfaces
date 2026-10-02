@@ -116,7 +116,8 @@ public final class IncrementalCompiler {
         abi.append("namespace=").append(program.namespace() == null ? "" : program.namespace()).append('\n');
 
         for (Ast.ModuleDecl module : program.modules()) {
-            abi.append("module ").append(module.name()).append('\n');
+            abi.append(module.singleton() ? "singleton module " : "module ")
+                    .append(module.name()).append('\n');
             for (Ast.Annotation annotation : module.annotations()) {
                 if (annotation.name().equals("AdheresTo")) {
                     abi.append(" module-annotation AdheresTo:");
@@ -130,10 +131,11 @@ public final class IncrementalCompiler {
     }
 
     private static void appendAbi(StringBuilder abi, Ast.Decl decl) {
+        // Init routines are lifecycle implementation details. Source digest
+        // changes rebuild this unit, but init bodies are not exported ABI.
+        if (decl instanceof Ast.InitDecl) return;
         if (decl instanceof Ast.FunctionDecl fn) {
             if (fn.visibility() != Ast.Visibility.PUBLIC) return;
-            if (hasAnnotation(fn, "__ActorIsolate")) abi.append("actor-isolate ");
-            else if (hasAnnotation(fn, "__Actor")) abi.append("actor ");
             abi.append(fn.kind()).append(" pub ").append(fn.name());
             appendGenerics(abi, fn.genericParameters());
             appendParams(abi, fn.parameters());
@@ -192,10 +194,6 @@ public final class IncrementalCompiler {
                     .append(field.type() == null ? "<inferred:" + field.initializer() + ">" : typeRef(field.type()))
                     .append(' ').append(field.name()).append('\n');
         }
-    }
-
-    private static boolean hasAnnotation(Ast.FunctionDecl fn, String name) {
-        return fn.annotations().stream().anyMatch(annotation -> annotation.name().equals(name));
     }
 
     private static void appendGenerics(StringBuilder abi, List<String> generics) {
