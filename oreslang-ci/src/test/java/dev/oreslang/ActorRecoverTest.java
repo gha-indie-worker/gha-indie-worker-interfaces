@@ -157,6 +157,25 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void inferredLambdaIncludesRecoverFallbackInItsResultType() throws Exception {
+        String output = run("""
+                pub routine main() => void {
+                  val compute = || -> {
+                    recover |err| -> {
+                      return 7;
+                    };
+
+                    panic "boom";
+                  };
+
+                  stdio.stdout.write(compute());
+                }
+                """);
+
+        assertEquals("7", output);
+    }
+
+    @Test
     void recoverMayProvideFallbackValueForNonVoidCallable() throws Exception {
         String output = run("""
                 fnc compute() => int {
