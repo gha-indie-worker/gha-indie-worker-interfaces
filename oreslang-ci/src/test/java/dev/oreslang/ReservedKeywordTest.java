@@ -13,7 +13,8 @@ import java.util.function.Function;
 import static org.junit.jupiter.api.Assertions.*;
 
 final class ReservedKeywordTest {
-    private static final List<String> RESERVED = List.of("of", "is", "as");
+    private static final List<String> RESERVED = List.of(
+            "of", "is", "as", "actor", "isolate", "recover", "panic");
 
     @Test
     void lexerAlwaysClassifiesOfIsAsAsKeywords() {
