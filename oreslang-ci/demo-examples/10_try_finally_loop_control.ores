@@ -1,0 +1,25 @@
+namespace try_finally_loop_control_demo;
+
+pub routine main() => void {
+  let i = 0;
+
+  for (; i < 3; i = i + 1) {
+    try {
+      stdio.stdout.write("try;");
+
+      if i == 0; do
+        continue;
+      fi
+
+      break;
+    } catch (err) {
+      stdio.stdout.write("catch;");
+    } finally {
+      stdio.stdout.write("finally;");
+    }
+  }
+
+  stdio.stdout.write("done;");
+  stdio.println(i);
+  return;
+}
