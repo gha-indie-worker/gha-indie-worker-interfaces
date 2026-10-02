@@ -45,6 +45,7 @@ public final class TypeChecker {
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     public static Ast.Program check(Ast.Program program) {
+        ReservedIdentifierValidator.check(program);
         TypeChecker checker = new TypeChecker();
         checker.validateImports(program);
         checker.collect(program);
