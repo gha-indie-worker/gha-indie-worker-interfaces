@@ -72,6 +72,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final AtomicBoolean accepting = new AtomicBoolean(true);
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private final CompletableFuture<Void> terminated = new CompletableFuture<>();
+        private volatile Thread runner;
 
         private ActorRef(ActorId id, ActorKind kind) {
             this.id = id;
@@ -99,6 +100,9 @@ public final class ActorRuntime implements AutoCloseable {
          * crash the caller unless the caller explicitly inspects/escalates it.
          */
         public void join() {
+            if (Thread.currentThread() == runner) {
+                throw new IllegalStateException("actor cannot join itself");
+            }
             terminated.join();
         }
 
@@ -267,6 +271,7 @@ public final class ActorRuntime implements AutoCloseable {
 
         @SuppressWarnings("unchecked")
         private void run() {
+            ref.runner = Thread.currentThread();
             try {
                 final Behavior<M> behavior = behaviorFactory.get();
                 final ActorContext<M> context = new ActorContext<>() {
