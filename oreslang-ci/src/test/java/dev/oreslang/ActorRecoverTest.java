@@ -314,6 +314,112 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void actorFunctionDeclarationSpawnsOneShotTask() throws Exception {
+        String output = run("""
+                pub actor fnc rebuild(String target) => void {
+                  stdio.stdout.write(target);
+                }
+
+                pub routine main() => void {
+                  val task = rebuild("X");
+                  task.join();
+                  stdio.stdout.write(task.failed);
+                  stdio.stdout.write(task.kind);
+                }
+                """);
+
+        assertEquals("Xfalseshared", output);
+    }
+
+    @Test
+    void actorIsolateRoutineDeclarationSpawnsIsolateTask() throws Exception {
+        String output = run("""
+                pub actor isolate routine compact(String target) => void {
+                  stdio.stdout.write(target);
+                }
+
+                pub routine main() => void {
+                  val task = compact("I");
+                  task.join();
+                  stdio.stdout.write(task.kind);
+                }
+                """);
+
+        assertEquals("Iisolate", output);
+    }
+
+    @Test
+    void actorTaskFailureDoesNotKillCaller() throws Exception {
+        String output = run("""
+                actor fnc explode(String message) => void {
+                  panic message;
+                }
+
+                pub routine main() => void {
+                  val task = explode("boom");
+                  task.join();
+                  stdio.stdout.write(task.failed);
+                  stdio.stdout.write("M");
+                }
+                """);
+
+        assertEquals("trueM", output);
+    }
+
+    @Test
+    void actorCallableMustDeclareVoid() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                TypeChecker.check(Parser.parse("""
+                        actor fnc bad() => int {
+                          return 1;
+                        }
+                        """)));
+
+        assertTrue(error.getMessage().contains("must declare void"));
+    }
+
+    @Test
+    void mainCannotBeDeclaredAsActor() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                TypeChecker.check(Parser.parse("""
+                        pub actor routine main() => void {
+                          return;
+                        }
+                        """)));
+
+        assertTrue(error.getMessage().contains("main is the root/process entrypoint"));
+    }
+
+    @Test
+    void actorCallableCannotAlsoBeAsync() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                TypeChecker.check(Parser.parse("""
+                        async actor fnc bad() => void {
+                          return;
+                        }
+                        """)));
+
+        assertTrue(error.getMessage().contains("cannot also be async"));
+    }
+
+    @Test
+    void actorTaskDoesNotExposeMailboxSend() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                TypeChecker.check(Parser.parse("""
+                        actor fnc work() => void {
+                          return;
+                        }
+
+                        pub routine main() => void {
+                          val task = work();
+                          task.send("nope");
+                        }
+                        """)));
+
+        assertTrue(error.getMessage().contains("unknown ActorTask member"));
+    }
+
+    @Test
     void recoveredActorContinuesAndStopsWithoutFailure() throws Exception {
         String output = run("""
                 pub routine main() => void {
