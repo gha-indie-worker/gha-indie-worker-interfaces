@@ -111,6 +111,49 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void recoverMayProvideFallbackValueForNonVoidCallable() throws Exception {
+        String output = run("""
+                fnc compute() => int {
+                  recover |err| -> {
+                    return 7;
+                  };
+
+                  panic "boom";
+                }
+
+                pub routine main() => void {
+                  stdio.stdout.write(compute());
+                }
+                """);
+
+        assertEquals("7", output);
+    }
+
+    @Test
+    void sameCallableTryCatchHandlesBeforeCallableRecover() throws Exception {
+        String output = run("""
+                fnc inner() => void {
+                  recover |err| -> {
+                    stdio.stdout.write("R");
+                    return;
+                  };
+
+                  try {
+                    panic "boom";
+                  } catch (err) {
+                    stdio.stdout.write("C");
+                  }
+                }
+
+                pub routine main() => void {
+                  inner();
+                }
+                """);
+
+        assertEquals("C", output);
+    }
+
+    @Test
     void multipleRecoverHandlersUnwindLifoAndCanRepanic() throws Exception {
         String output = run("""
                 fnc inner() => void {
@@ -208,6 +251,25 @@ final class ActorRecoverTest {
                 """);
 
         assertEquals("13", output);
+    }
+
+    @Test
+    void isolateActorMayDieWithoutKillingMain() throws Exception {
+        String output = run("""
+                pub routine main() => void {
+                  val worker = actor isolate |String msg| -> {
+                    panic msg;
+                  };
+
+                  worker.send("boom");
+                  worker.join();
+
+                  stdio.stdout.write(worker.failed);
+                  stdio.stdout.write("M");
+                }
+                """);
+
+        assertEquals("trueM", output);
     }
 
     @Test
