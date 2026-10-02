@@ -1,0 +1,26 @@
+namespace defer_with_loop_control_demo;
+
+pub routine main() => void {
+  defer || -> {
+    stdio.stdout.write("routine-defer;");
+  };
+
+  for (let i = 0; i < 4; i = i + 1) {
+    defer || -> {
+      stdio.stdout.write("loop-defer;");
+    };
+
+    if i == 1; do
+      continue;
+    fi
+
+    if i == 2; do
+      break;
+    fi
+
+    stdio.stdout.write("body;");
+  }
+
+  stdio.stdout.write("after-loop;");
+  return;
+}
