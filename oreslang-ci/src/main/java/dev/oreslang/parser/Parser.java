@@ -962,7 +962,8 @@ public final class Parser {
     }
 
     private boolean isReservedIdentifierKeyword(Token.Type type) {
-        return type == AS || type == IS || type == OF;
+        return type == AS || type == IS || type == OF
+                || type == ACTOR || type == ISOLATE || type == RECOVER || type == PANIC;
     }
 
     private boolean check(Token.Type type) { return peek().type() == type; }
