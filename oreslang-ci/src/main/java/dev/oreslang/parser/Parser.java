@@ -540,6 +540,19 @@ public final class Parser {
             consumeStatementTerminator("defer statement should end with ';'");
             return new Ast.DeferStmt(expression);
         }
+        if (match(RECOVER)) {
+            Ast.Expr handler = parseExpression();
+            consumeStatementTerminator("recover statement should end with ';'");
+            return new Ast.RecoverStmt(handler);
+        }
+        if (match(PANIC)) {
+            if (check(SEMICOLON) || isSafeStatementBoundary()) {
+                throw error(peek(), "panic requires a value");
+            }
+            Ast.Expr value = parseExpression();
+            consumeStatementTerminator("panic statement should end with ';'");
+            return new Ast.PanicStmt(value);
+        }
         if (match(BREAK)) {
             consumeStatementTerminator("break statement should end with ';'");
             return new Ast.BreakStmt();
@@ -798,6 +811,14 @@ public final class Parser {
         if (match(NULL)) throw error(previous(), "standalone null values are forbidden; use Option<T>");
         if (match(SELF)) return new Ast.NameExpr("self");
         if (match(IDENT)) return new Ast.NameExpr(previous().lexeme());
+        if (match(ACTOR)) {
+            Ast.ActorMode mode = match(ISOLATE) ? Ast.ActorMode.ISOLATE : Ast.ActorMode.SHARED;
+            Ast.LambdaExpr behavior;
+            if (check(PIPE)) behavior = parsePipeLambda();
+            else if (check(LPAREN) && looksLikeLambda()) behavior = parseLambda();
+            else throw error(peek(), "actor requires a lambda behavior, e.g. actor |Message msg| -> { ... }");
+            return new Ast.ActorExpr(mode, behavior);
+        }
         if (match(NEW)) {
             Ast.TypeRef type = parseTypeRef();
             consume(LPAREN, "expected '(' after new type");
