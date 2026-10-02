@@ -44,10 +44,17 @@ public final class TypeChecker {
     private final Set<String> importedValues = new HashSet<>();
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
+    /**
+     * File/root and module-scope lifecycle names. These are deliberately not
+     * lexer keywords: locals and class members may still use main/init.
+     */
+    private static final Set<String> LIFECYCLE_CALLABLE_NAMES = Set.of("main", "init");
+
     public static Ast.Program check(Ast.Program program) {
         ReservedIdentifierValidator.check(program);
         TypeChecker checker = new TypeChecker();
         checker.validateImports(program);
+        checker.validateLifecycleNames(program);
         checker.collect(program);
         checker.validateRoutineRecursion();
         checker.validate(program);
@@ -71,6 +78,43 @@ public final class TypeChecker {
                 }
             }
         }
+    }
+
+    private void validateLifecycleNames(Ast.Program program) {
+        for (Ast.ImportDecl imported : program.imports()) {
+            if (imported.namespace() != null && isLifecycleCallableName(imported.namespace())) {
+                throw new IllegalArgumentException(
+                        "'" + imported.namespace() + "' is reserved at file scope for a lifecycle callable");
+            }
+            for (String name : imported.names()) {
+                if (isLifecycleCallableName(name)) {
+                    throw new IllegalArgumentException(
+                            "'" + name + "' is reserved at file scope for a lifecycle callable");
+                }
+            }
+        }
+
+        for (Ast.ModuleDecl module : program.modules()) {
+            for (Ast.Decl decl : module.declarations()) {
+                if (decl instanceof Ast.FunctionDecl) continue;
+
+                String declaredName = null;
+                if (decl instanceof Ast.ClassDecl klass) declaredName = klass.name();
+                else if (decl instanceof Ast.InterfaceDecl iface) declaredName = iface.name();
+                else if (decl instanceof Ast.TypeAliasDecl alias) declaredName = alias.name();
+                else if (decl instanceof Ast.FieldDecl field) declaredName = field.name();
+
+                if (declaredName != null && isLifecycleCallableName(declaredName)) {
+                    throw new IllegalArgumentException(
+                            "'" + declaredName + "' is reserved in module '" + module.name()
+                                    + "' for an fnc/routine lifecycle callable");
+                }
+            }
+        }
+    }
+
+    private boolean isLifecycleCallableName(String name) {
+        return LIFECYCLE_CALLABLE_NAMES.contains(name);
     }
 
     private void collect(Ast.Program program) {
@@ -287,9 +331,9 @@ public final class TypeChecker {
         Env env = new Env(null);
         for (Ast.Param param : fn.parameters()) env.define(param.name(), resolveParam(param, generics, null), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
         Type returns = resolve(fn.returnType(), generics, null);
-        if (isActorCallable(fn) && fn.name().equals("main")) {
+        if (isActorCallable(fn) && isLifecycleCallableName(fn.name())) {
             throw new IllegalArgumentException(
-                    "main is the root/process entrypoint and cannot be declared actor; spawn actor callables from main");
+                    fn.name() + " is a file/module lifecycle entrypoint and cannot be declared actor");
         }
         if (isActorCallable(fn) && fn.async()) {
             throw new IllegalArgumentException(
