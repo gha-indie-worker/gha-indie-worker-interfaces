@@ -42,6 +42,31 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void recoverMayObserveThenRepanicSameFailureValue() throws Exception {
+        String output = run("""
+                fnc inner() => void {
+                  recover |err| -> {
+                    stdio.stdout.write(err);
+                    panic err;
+                  };
+
+                  panic "boom";
+                }
+
+                pub routine main() => void {
+                  try {
+                    inner();
+                  } catch (err) {
+                    stdio.stdout.write(":");
+                    stdio.stdout.write(err);
+                  }
+                }
+                """);
+
+        assertEquals("boom:boom", output);
+    }
+
+    @Test
     void recoverMayRepanicToCallerCatch() throws Exception {
         String output = run("""
                 fnc inner() => void {
