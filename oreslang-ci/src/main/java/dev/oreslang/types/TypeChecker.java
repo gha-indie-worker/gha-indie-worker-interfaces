@@ -161,6 +161,10 @@ public final class TypeChecker {
                 validateLoopControlExpr(expression.expression());
             } else if (stmt instanceof Ast.DeferStmt defer) {
                 validateLoopControlExpr(defer.expression());
+            } else if (stmt instanceof Ast.RecoverStmt recover) {
+                validateLoopControlExpr(recover.handler());
+            } else if (stmt instanceof Ast.PanicStmt panic) {
+                validateLoopControlExpr(panic.value());
             } else if (stmt instanceof Ast.IfStmt conditional) {
                 for (Ast.IfBranch branch : conditional.branches()) {
                     validateLoopControlExpr(branch.condition());
@@ -217,6 +221,9 @@ public final class TypeChecker {
         } else if (expr instanceof Ast.LambdaExpr e) {
             // A lambda is a new callable boundary: it cannot break/continue an outer loop.
             validateLoopControlBlock(e.blockBody(), 0);
+        } else if (expr instanceof Ast.ActorExpr e) {
+            // An actor behavior is also a callable boundary.
+            validateLoopControlBlock(e.behavior().blockBody(), 0);
         }
     }
 
@@ -423,6 +430,14 @@ public final class TypeChecker {
             checkDefer(defer, env, generics, self);
             return;
         }
+        if (stmt instanceof Ast.RecoverStmt recover) {
+            checkRecover(recover, env, generics, expectedReturn, self);
+            return;
+        }
+        if (stmt instanceof Ast.PanicStmt panic) {
+            typeOf(panic.value(), env, generics, self);
+            return;
+        }
         if (stmt instanceof Ast.IfStmt conditional) {
             for (Ast.IfBranch branch : conditional.branches()) {
                 requireAssignable(typeOf(branch.condition(), env, generics, self), Primitive.BOOL, "if condition");
@@ -462,6 +477,21 @@ public final class TypeChecker {
             throw new IllegalArgumentException(
                     "defer evaluates its operand immediately; the result must be an arity-0 function, got " + produced);
         }
+    }
+
+    private void checkRecover(
+            Ast.RecoverStmt recover,
+            Env env,
+            Set<String> generics,
+            Type expectedReturn,
+            Type self) {
+        Function expected = new Function(List.of(Unknown.INSTANCE), expectedReturn);
+        Type produced = typeOfWithExpected(recover.handler(), expected, env, generics, self);
+        if (!(produced instanceof Function fn) || fn.parameters().size() != 1) {
+            throw new IllegalArgumentException(
+                    "recover evaluates its handler immediately; the result must be an arity-1 function, got " + produced);
+        }
+        requireAssignable(fn.result(), expectedReturn, "recover handler result");
     }
 
     private Type typeOf(Ast.Expr expr, Env env, Set<String> generics, Type self) {
@@ -634,6 +664,16 @@ public final class TypeChecker {
                 return result;
             }
             if (receiver instanceof Named named) {
+                if (named.name().equals("Actor") && named.arguments().size() == 1) {
+                    Type messageType = named.arguments().getFirst();
+                    return switch (member.member()) {
+                        case "send" -> new Function(List.of(messageType), Primitive.VOID);
+                        case "stop", "join" -> new Function(List.of(), Primitive.VOID);
+                        case "alive", "failed" -> Primitive.BOOL;
+                        case "kind" -> Primitive.STRING;
+                        default -> throw new IllegalArgumentException("unknown Actor member '" + member.member() + "'");
+                    };
+                }
                 Ast.ClassDecl klass = findClass(named.name());
                 if (klass != null) {
                     Type field = findFieldType(klass, member.member(), new LinkedHashSet<>());
@@ -695,6 +735,17 @@ public final class TypeChecker {
                 }
             }
             return new Record(members);
+        }
+        if (expr instanceof Ast.ActorExpr actor) {
+            Ast.LambdaExpr behavior = actor.behavior();
+            if (behavior.parameters().size() != 1) {
+                throw new IllegalArgumentException("actor behavior must accept exactly one mailbox message parameter");
+            }
+            Ast.Param messageParam = behavior.parameters().getFirst();
+            Type messageType = resolveParam(messageParam, generics, self);
+            Function expectedBehavior = new Function(List.of(messageType), Primitive.VOID);
+            validateLambdaAgainstExpected(behavior, expectedBehavior, env, generics, self);
+            return new Named("Actor", List.of(messageType));
         }
         if (expr instanceof Ast.LambdaExpr lambda) {
             Env lambdaEnv = new Env(env);
@@ -1169,6 +1220,10 @@ public final class TypeChecker {
                 if (element == Primitive.VOID) throw new IllegalArgumentException("Option<void> is invalid; use void for no return value");
                 yield new Named("Option", List.of(element));
             }
+            case "Actor" -> {
+                if (ref.inferArguments() || ref.arguments().size() != 1) throw new IllegalArgumentException("Actor requires exactly one explicit message type argument");
+                yield new Named("Actor", List.of(resolve(ref.arguments().getFirst(), generics, self)));
+            }
             case "Fnc" -> {
                 List<Type> args = ref.arguments().stream().map(arg -> resolve(arg, generics, self)).toList();
                 if (args.isEmpty()) throw new IllegalArgumentException("Fnc requires at least a result type");
@@ -1293,7 +1348,7 @@ public final class TypeChecker {
 
     private boolean definitelyReturns(List<Ast.Stmt> body) {
         for (Ast.Stmt stmt : body) {
-            if (stmt instanceof Ast.ReturnStmt) return true;
+            if (stmt instanceof Ast.ReturnStmt || stmt instanceof Ast.PanicStmt) return true;
             if (stmt instanceof Ast.IfStmt conditional) {
                 boolean allBranches = !conditional.branches().isEmpty()
                         && conditional.branches().stream().allMatch(branch -> definitelyReturns(branch.body()))
@@ -1354,6 +1409,8 @@ public final class TypeChecker {
         else if (stmt instanceof Ast.ReturnStmt s && s.value() != null) collectCalls(s.value(), module, out);
         else if (stmt instanceof Ast.ExprStmt s) collectCalls(s.expression(), module, out);
         else if (stmt instanceof Ast.DeferStmt s) collectCalls(s.expression(), module, out);
+        else if (stmt instanceof Ast.RecoverStmt s) collectCalls(s.handler(), module, out);
+        else if (stmt instanceof Ast.PanicStmt s) collectCalls(s.value(), module, out);
         else if (stmt instanceof Ast.IfStmt s) {
             for (Ast.IfBranch b : s.branches()) {
                 collectCalls(b.condition(), module, out);
@@ -1397,6 +1454,8 @@ public final class TypeChecker {
         else if (expr instanceof Ast.LambdaExpr e) {
             if (e.expressionBody() != null) collectCalls(e.expressionBody(), module, out);
             if (e.blockBody() != null) for (Ast.Stmt nested : e.blockBody()) collectCalls(nested, module, out);
+        } else if (expr instanceof Ast.ActorExpr e) {
+            for (Ast.Stmt nested : e.behavior().blockBody()) collectCalls(nested, module, out);
         }
     }
 
