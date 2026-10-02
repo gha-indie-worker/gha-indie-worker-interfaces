@@ -22,6 +22,7 @@ public final class Lexer {
         KEYWORDS.put("type", TYPE); KEYWORDS.put("typeof", TYPEOF); KEYWORDS.put("interface", INTERFACE); KEYWORDS.put("impl", IMPL); KEYWORDS.put("abstract", ABSTRACT);
         KEYWORDS.put("void", VOID); KEYWORDS.put("static", STATIC); KEYWORDS.put("pub", PUB); KEYWORDS.put("private", PRIVATE);
         KEYWORDS.put("return", RETURN); KEYWORDS.put("defer", DEFER); KEYWORDS.put("break", BREAK); KEYWORDS.put("continue", CONTINUE);
+        KEYWORDS.put("actor", ACTOR); KEYWORDS.put("isolate", ISOLATE); KEYWORDS.put("recover", RECOVER); KEYWORDS.put("panic", PANIC);
         KEYWORDS.put("val", VAL); KEYWORDS.put("const", CONST);
         KEYWORDS.put("let", LET); KEYWORDS.put("mut", MUT); KEYWORDS.put("self", SELF); KEYWORDS.put("true", TRUE); KEYWORDS.put("false", FALSE);
         KEYWORDS.put("null", NULL); KEYWORDS.put("obj", OBJ); KEYWORDS.put("arr", ARR);
