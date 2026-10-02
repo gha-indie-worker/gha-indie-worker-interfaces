@@ -472,28 +472,6 @@ public final class OwnershipChecker {
             return new ValueInfo(type, ValueKind.MOVE_ONLY, null);
         }
 
-        if (call.callee() instanceof Ast.NameExpr name
-                && (name.name().equals("Some") || name.name().equals("Ok") || name.name().equals("Err"))) {
-            if (call.arguments().size() != 1) {
-                return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.MOVE_ONLY, null);
-            }
-            ValueInfo payload = checkExpr(call.arguments().getFirst(), scope, true);
-            if (payload.kind == ValueKind.IMM_BORROW || payload.kind == ValueKind.MUT_BORROW
-                    || (payload.type != null && payload.type.isBorrow())) {
-                throw error(name.name()
-                        + " cannot store a borrow in an owned sum value until explicit lifetime parameters are supported");
-            }
-            if (name.name().equals("Some")) {
-                Ast.TypeRef type = new Ast.TypeRef("Option", List.of(payload.type), false);
-                return new ValueInfo(type, kindOfType(type), null);
-            }
-            Ast.TypeRef unknown = Ast.TypeRef.inferred();
-            Ast.TypeRef type = name.name().equals("Ok")
-                    ? new Ast.TypeRef("Result", List.of(payload.type, unknown), false)
-                    : new Ast.TypeRef("Result", List.of(unknown, payload.type), false);
-            return new ValueInfo(type, ValueKind.MOVE_ONLY, null);
-        }
-
         if (call.callee() instanceof Ast.NameExpr name) {
             Ast.FunctionDecl fn = findFunction(name.name());
             if (fn != null) {
@@ -522,6 +500,9 @@ public final class OwnershipChecker {
         }
 
         if (call.callee() instanceof Ast.MemberExpr member) {
+            ValueInfo sumCall = checkBuiltinSumCall(member, call.arguments(), scope);
+            if (sumCall != null) return sumCall;
+
             Ast.ClassDecl staticClass = classNamespaceOf(member.receiver(), scope);
             if (staticClass != null) {
                 Ast.MethodDecl staticFunction = findStaticMethod(
