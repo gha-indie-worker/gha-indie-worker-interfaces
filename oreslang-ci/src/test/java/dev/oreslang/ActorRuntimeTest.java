@@ -137,6 +137,28 @@ final class ActorRuntimeTest {
     }
 
     @Test
+    void runtimeShutdownCancellationDoesNotMarkActorFailed() throws Exception {
+        ActorRuntime runtime = new ActorRuntime();
+        CountDownLatch started = new CountDownLatch(1);
+
+        var ref = runtime.<String>spawn(() -> (message, context) -> {
+            started.countDown();
+            while (true) {
+                context.runtime().schedulerSafepoint();
+            }
+        });
+
+        ref.send("run");
+        assertTrue(started.await(2, TimeUnit.SECONDS));
+
+        runtime.close();
+        ref.join();
+
+        assertFalse(ref.isAlive());
+        assertFalse(ref.failed());
+    }
+
+    @Test
     void actorKindIsObservableWithoutChangingFailureIsolation() {
         try (ActorRuntime runtime = new ActorRuntime()) {
             var shared = runtime.<String>spawn(ActorRuntime.ActorKind.SHARED, () -> (message, context) -> { });
