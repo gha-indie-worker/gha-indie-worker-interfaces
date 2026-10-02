@@ -66,6 +66,52 @@ final class ActorRecoverTest {
     }
 
     @Test
+    void recoverValueMayBeObservedAndThenRepanicked() throws Exception {
+        String output = run("""
+                fnc inner() => void {
+                  recover |err| -> {
+                    stdio.stdout.write(err);
+                    panic err;
+                  };
+
+                  panic "boom";
+                }
+
+                pub routine main() => void {
+                  try {
+                    inner();
+                  } catch (err) {
+                    stdio.stdout.write(err);
+                  }
+                }
+                """);
+
+        assertEquals("boomboom", output);
+    }
+
+    @Test
+    void recoverRegisteredInNestedBlockRemainsCallableScoped() throws Exception {
+        String output = run("""
+                fnc inner() => void {
+                  if true; do
+                    recover |err| -> {
+                      stdio.stdout.write("R");
+                      return;
+                    };
+                  fi
+
+                  panic "boom";
+                }
+
+                pub routine main() => void {
+                  inner();
+                }
+                """);
+
+        assertEquals("R", output);
+    }
+
+    @Test
     void defersRunBeforeRecover() throws Exception {
         String output = run("""
                 fnc inner() => void {
@@ -188,10 +234,15 @@ final class ActorRecoverTest {
                       return;
                     };
 
-                    panic msg;
+                    if msg == "boom"; do
+                      panic msg;
+                    fi
+
+                    stdio.stdout.write("O");
                   };
 
                   worker.send("boom");
+                  worker.send("ok");
                   worker.stop();
                   worker.join();
 
@@ -201,7 +252,7 @@ final class ActorRecoverTest {
                 }
                 """);
 
-        assertEquals("Rfalsefalseshared", output);
+        assertEquals("ROfalsefalseshared", output);
     }
 
     @Test
