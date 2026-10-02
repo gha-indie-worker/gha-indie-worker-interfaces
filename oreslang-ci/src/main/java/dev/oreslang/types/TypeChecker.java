@@ -81,6 +81,8 @@ public final class TypeChecker {
     }
 
     private void validateLifecycleNames(Ast.Program program) {
+        int mainDeclarations = 0;
+
         for (Ast.ImportDecl imported : program.imports()) {
             if (imported.namespace() != null && isLifecycleCallableName(imported.namespace())) {
                 throw new IllegalArgumentException(
@@ -98,7 +100,17 @@ public final class TypeChecker {
 
         for (Ast.ModuleDecl module : program.modules()) {
             for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl) continue;
+                if (decl instanceof Ast.FunctionDecl fn) {
+                    if (fn.name().equals("main")) {
+                        mainDeclarations++;
+                        if (mainDeclarations > 1) {
+                            throw new IllegalArgumentException(
+                                    "a source file/code unit may declare at most one main lifecycle callable; "
+                                            + "additional main found in module '" + module.name() + "'");
+                        }
+                    }
+                    continue;
+                }
 
                 String declaredName = null;
                 if (decl instanceof Ast.ClassDecl klass) declaredName = klass.name();
