@@ -5,6 +5,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
 import dev.oreslang.OresLanguage;
 import dev.oreslang.ast.Ast;
+import dev.oreslang.compiler.ClosureCaptureAnalyzer;
 import dev.oreslang.runtime.OresContext;
 import dev.oreslang.runtime.CapabilityChecker;
 import dev.oreslang.runtime.IsolatePolicy;
@@ -12,6 +13,7 @@ import dev.oreslang.runtime.IsolatePolicy;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,6 +53,7 @@ public final class OresEvalRootNode extends RootNode {
         private final Map<String, Ast.ModuleDecl> modules = new HashMap<>();
         private final Set<String> ambiguousFunctions = new LinkedHashSet<>();
         private final Set<String> ambiguousClasses = new LinkedHashSet<>();
+        private final Map<Ast.LambdaExpr, ClosureCaptureAnalyzer.CapturePlan> capturePlans = new IdentityHashMap<>();
 
         private Evaluator(Ast.Program program, OresContext context) {
             this.program = program;
@@ -98,12 +101,15 @@ public final class OresEvalRootNode extends RootNode {
                 if (fn.parameters().isEmpty() && args.size() == 1 && args.getFirst() instanceof Object[] array && array.length == 0) args = List.of();
                 else throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
             }
-            Env env = new Env(null);
+            Env env = new Env(null, fn.nonLexical());
             for (int i = 0; i < fn.parameters().size(); i++) {
                 Ast.Param param = fn.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(fn.body(), env);
+            try {
+                executeBlock(fn.body(), env);
+                return null;
+            } catch (ReturnSignal signal) { return signal.value; }
         }
 
         private Object callMethod(OresObject receiver, Ast.MethodDecl method, List<?> args) {
@@ -114,50 +120,23 @@ public final class OresEvalRootNode extends RootNode {
                 Ast.Param param = method.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(method.body(), env);
-        }
-
-        private Object executeCallableBody(List<Ast.Stmt> body, Env env) {
-            CallFrame frame = new CallFrame();
-            Object result = null;
-            RuntimeException bodyFailure = null;
-
             try {
-                executeBlock(body, env, frame);
-            } catch (ReturnSignal signal) {
-                result = signal.value;
-            } catch (RuntimeException failure) {
-                bodyFailure = failure;
-            }
-
-            RuntimeException deferFailure = drainDeferred(frame);
-            if (bodyFailure != null) {
-                if (deferFailure != null) bodyFailure.addSuppressed(deferFailure);
-                throw bodyFailure;
-            }
-            if (deferFailure != null) throw deferFailure;
-            return result;
+                executeBlock(method.body(), env);
+                return null;
+            } catch (ReturnSignal signal) { return signal.value; }
         }
 
-        private RuntimeException drainDeferred(CallFrame frame) {
-            RuntimeException firstFailure = null;
-            while (!frame.deferred.isEmpty()) {
-                try {
-                    frame.deferred.pop().call(List.of());
-                } catch (RuntimeException failure) {
-                    if (firstFailure == null) firstFailure = failure;
-                    else firstFailure.addSuppressed(failure);
-                }
-            }
-            return firstFailure;
-        }
-
-        private void executeBlock(List<Ast.Stmt> statements, Env parent, CallFrame frame) {
+        private void executeBlock(List<Ast.Stmt> statements, Env parent) {
             Env env = new Env(parent);
-            for (Ast.Stmt stmt : statements) executeStatement(stmt, env, frame);
+            ArrayDeque<Ast.Expr> deferred = new ArrayDeque<>();
+            try {
+                for (Ast.Stmt stmt : statements) executeStatement(stmt, env, deferred);
+            } finally {
+                while (!deferred.isEmpty()) eval(deferred.pop(), env);
+            }
         }
 
-        private void executeStatement(Ast.Stmt stmt, Env env, CallFrame frame) {
+        private void executeStatement(Ast.Stmt stmt, Env env, ArrayDeque<Ast.Expr> deferred) {
             if (stmt instanceof Ast.BindingStmt binding) {
                 if (binding.initializer() instanceof Ast.LambdaExpr) {
                     env.reserve(binding.name(), binding.kind());
@@ -178,34 +157,23 @@ public final class OresEvalRootNode extends RootNode {
                 return;
             }
             if (stmt instanceof Ast.ReturnStmt ret) throw new ReturnSignal(ret.value() == null ? null : eval(ret.value(), env));
-            if (stmt instanceof Ast.BreakStmt) throw BreakSignal.INSTANCE;
-            if (stmt instanceof Ast.ContinueStmt) throw ContinueSignal.INSTANCE;
             if (stmt instanceof Ast.ExprStmt expression) { eval(expression.expression(), env); return; }
-            if (stmt instanceof Ast.DeferStmt defer) {
-                Object produced = eval(defer.expression(), env);
-                if (!(produced instanceof Invokable action)) {
-                    throw new IllegalArgumentException(
-                            "defer operand must evaluate immediately to an arity-0 callable; got " + produced);
-                }
-                frame.deferred.push(action);
-                return;
-            }
+            if (stmt instanceof Ast.DeferStmt defer) { deferred.push(defer.expression()); return; }
             if (stmt instanceof Ast.IfStmt ifStmt) {
                 for (Ast.IfBranch branch : ifStmt.branches()) {
-                    if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env, frame); return; }
+                    if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env); return; }
                 }
-                executeBlock(ifStmt.elseBody(), env, frame);
+                executeBlock(ifStmt.elseBody(), env);
                 return;
             }
             if (stmt instanceof Ast.TryStmt tried) {
-                try { executeBlock(tried.body(), env, frame); }
+                try { executeBlock(tried.body(), env); }
                 catch (ReturnSignal signal) { throw signal; }
-                catch (BreakSignal | ContinueSignal signal) { throw signal; }
                 catch (RuntimeException failure) {
                     Env catchEnv = new Env(env);
                     catchEnv.define(tried.errorName(), failure, Ast.BindingKind.VAL);
-                    executeBlock(tried.catchBody(), catchEnv, frame);
-                } finally { executeBlock(tried.finallyBody(), env, frame); }
+                    executeBlock(tried.catchBody(), catchEnv);
+                } finally { executeBlock(tried.finallyBody(), env); }
                 return;
             }
             if (stmt instanceof Ast.ForOfStmt loop) {
@@ -214,28 +182,16 @@ public final class OresEvalRootNode extends RootNode {
                     context.schedulerSafepoint();
                     Env iteration = new Env(env);
                     iteration.define(loop.bindingName(), item, loop.bindingKind());
-                    try {
-                        executeBlock(loop.body(), iteration, frame);
-                    } catch (ContinueSignal ignored) {
-                        continue;
-                    } catch (BreakSignal ignored) {
-                        break;
-                    }
+                    executeBlock(loop.body(), iteration);
                 }
                 return;
             }
             if (stmt instanceof Ast.ForStmt loop) {
                 Env loopEnv = new Env(env);
-                if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, frame);
+                if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, new ArrayDeque<>());
                 while (loop.condition() == null || truth(eval(loop.condition(), loopEnv))) {
                     context.schedulerSafepoint();
-                    try {
-                        executeBlock(loop.body(), loopEnv, frame);
-                    } catch (ContinueSignal ignored) {
-                        // C-style for semantics: continue still runs the update expression.
-                    } catch (BreakSignal ignored) {
-                        break;
-                    }
+                    executeBlock(loop.body(), loopEnv);
                     if (loop.update() != null) eval(loop.update(), loopEnv);
                 }
             }
@@ -317,6 +273,10 @@ public final class OresEvalRootNode extends RootNode {
                 return binary(binary.operator(), eval(binary.left(), env), eval(binary.right(), env));
             }
             if (expr instanceof Ast.CallExpr call) {
+                if (call.callee() instanceof Ast.LambdaExpr lambda) {
+                    List<Object> args = call.arguments().stream().map(arg -> eval(arg, env)).toList();
+                    return invokeInlineLambda(lambda, env, args);
+                }
                 if (call.callee() instanceof Ast.MemberExpr methodCall) {
                     Object receiver = eval(methodCall.receiver(), env);
                     List<Object> args = call.arguments().stream().map(arg -> eval(arg, env)).toList();
@@ -381,19 +341,63 @@ public final class OresEvalRootNode extends RootNode {
                 return Map.copyOf(result);
             }
             if (expr instanceof Ast.LambdaExpr lambda) {
-                Env captured = env.snapshot();
-                return (Invokable) args -> {
-                    if (args.size() != lambda.parameters().size()) throw new IllegalArgumentException("lambda arity mismatch");
-                    Env local = new Env(captured);
-                    for (int i = 0; i < lambda.parameters().size(); i++) {
-                        Ast.Param param = lambda.parameters().get(i);
-                        local.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
-                    }
-                    if (lambda.expressionBody() != null) return eval(lambda.expressionBody(), local);
-                    return executeCallableBody(lambda.blockBody(), local);
-                };
+                boolean inheritedNonLexical = env.descendantsNonLexical();
+                requireCaptureModeAllowed(lambda, inheritedNonLexical);
+
+                boolean nonLexical = lambda.nonLexical() || inheritedNonLexical;
+                ClosureCaptureAnalyzer.CapturePlan capturePlan = nonLexical
+                        ? null
+                        : capturePlans.computeIfAbsent(lambda, ClosureCaptureAnalyzer::analyze);
+                Env captured = nonLexical || !capturePlan.requiresEnvironment()
+                        ? null
+                        : env.capture(capturePlan.names());
+
+                /*
+                 * Keep producing a distinct first-class function value even on
+                 * the no-environment path. Oreslang currently exposes object
+                 * equality, so interning stateless closures here would change
+                 * observable function identity.
+                 */
+                return (Invokable) args -> invokeLambda(lambda, captured, nonLexical, args);
             }
             throw new IllegalArgumentException("unsupported expression " + expr);
+        }
+
+        /**
+         * Immediate lambda calls do not need a heap closure environment at all:
+         * the invocation can read its lexical parent directly for the duration
+         * of the call. If it creates an escaping nested closure, that nested
+         * closure still performs normal selective capture before it escapes.
+         */
+        private Object invokeInlineLambda(Ast.LambdaExpr lambda, Env caller, List<Object> args) {
+            boolean inheritedNonLexical = caller.descendantsNonLexical();
+            requireCaptureModeAllowed(lambda, inheritedNonLexical);
+            boolean nonLexical = lambda.nonLexical() || inheritedNonLexical;
+            return invokeLambda(lambda, nonLexical ? null : caller, nonLexical, args);
+        }
+
+        private void requireCaptureModeAllowed(Ast.LambdaExpr lambda, boolean inheritedNonLexical) {
+            if (lambda.explicitLexical() && inheritedNonLexical) {
+                throw new IllegalArgumentException("'lex'/'lexical' lambda cannot override an enclosing nlex capture barrier");
+            }
+        }
+
+        private Object invokeLambda(Ast.LambdaExpr lambda, Env captured, boolean nonLexical, List<Object> args) {
+            if (args.size() != lambda.parameters().size()) throw new IllegalArgumentException("lambda arity mismatch");
+
+            Env local = new Env(captured, nonLexical);
+            for (int i = 0; i < lambda.parameters().size(); i++) {
+                Ast.Param param = lambda.parameters().get(i);
+                local.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
+            }
+
+            if (lambda.expressionBody() != null) return eval(lambda.expressionBody(), local);
+            try {
+                executeBlock(lambda.blockBody(), local);
+                return null;
+            } catch (ReturnSignal signal) {
+                return signal.value;
+            }
         }
 
         private Object member(Object receiver, String name) {
@@ -461,7 +465,10 @@ public final class OresEvalRootNode extends RootNode {
                 Ast.Param param = fn.parameters().get(i);
                 env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
             }
-            return executeCallableBody(fn.body(), env);
+            try {
+                executeBlock(fn.body(), env);
+                return null;
+            } catch (ReturnSignal signal) { return signal.value; }
         }
 
         /**
@@ -642,15 +649,17 @@ public final class OresEvalRootNode extends RootNode {
 
     @FunctionalInterface private interface Invokable { Object call(List<Object> arguments); }
 
-    private static final class CallFrame {
-        private final ArrayDeque<Invokable> deferred = new ArrayDeque<>();
-    }
-
     private static final class Env {
         private static final Object MISSING = new Object();
         private final Env parent;
+        private final boolean descendantsNonLexical;
         private final Map<String, Slot> slots = new HashMap<>();
-        private Env(Env parent) { this.parent = parent; }
+        private Env(Env parent) { this(parent, parent != null && parent.descendantsNonLexical); }
+        private Env(Env parent, boolean descendantsNonLexical) {
+            this.parent = parent;
+            this.descendantsNonLexical = descendantsNonLexical;
+        }
+        private boolean descendantsNonLexical() { return descendantsNonLexical; }
         private void define(String name, Object value, Ast.BindingKind kind) {
             if (slots.putIfAbsent(name, new Slot(value, kind)) != null) throw new IllegalArgumentException("duplicate binding " + name);
         }
@@ -673,7 +682,35 @@ public final class OresEvalRootNode extends RootNode {
             if (parent != null) { parent.assign(name, value); return; }
             throw new IllegalArgumentException("unknown binding " + name);
         }
-        private Env snapshot() { Env cp=new Env(parent==null?null:parent.snapshot()); cp.slots.putAll(slots); return cp; }
+        /**
+         * Build a flat closure environment containing only activation-local
+         * names that the compiler identified as free variables.
+         *
+         * Immutable slots are copied so the closure does not retain the outer
+         * frame/slot object. Mutable slots and reserved recursive slots are
+         * shared because lexical semantics require later writes/initialization
+         * to remain visible to the closure.
+         */
+        private Env capture(List<String> names) {
+            if (names.isEmpty()) return null;
+
+            Env captured = new Env(null, false);
+            for (String name : names) {
+                Slot source = findSlot(name);
+                if (source == null) continue; // module/global/import/builtin
+                Slot stored = source.kind == Ast.BindingKind.LET || source.value == MISSING
+                        ? source
+                        : new Slot(source.value, source.kind);
+                captured.slots.put(name, stored);
+            }
+            return captured.slots.isEmpty() ? null : captured;
+        }
+
+        private Slot findSlot(String name) {
+            Slot local = slots.get(name);
+            if (local != null) return local;
+            return parent == null ? null : parent.findSlot(name);
+        }
     }
 
     private static final class Slot {
@@ -685,16 +722,6 @@ public final class OresEvalRootNode extends RootNode {
     private static final class ReturnSignal extends RuntimeException {
         private final Object value;
         private ReturnSignal(Object value) { super(null,null,false,false); this.value=value; }
-    }
-
-    private static final class BreakSignal extends RuntimeException {
-        private static final BreakSignal INSTANCE = new BreakSignal();
-        private BreakSignal() { super(null, null, false, false); }
-    }
-
-    private static final class ContinueSignal extends RuntimeException {
-        private static final ContinueSignal INSTANCE = new ContinueSignal();
-        private ContinueSignal() { super(null, null, false, false); }
     }
 
     private record Complex(double real, double imaginary) {

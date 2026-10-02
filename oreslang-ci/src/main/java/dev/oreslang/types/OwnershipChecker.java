@@ -73,7 +73,7 @@ public final class OwnershipChecker {
     }
 
     private void checkFunction(Ast.FunctionDecl fn) {
-        Scope scope = new Scope(null);
+        Scope scope = new Scope(null, fn.nonLexical());
         for (Ast.Param param : fn.parameters()) {
             scope.define(param.name(), stateForParam(param));
         }
@@ -142,9 +142,7 @@ public final class OwnershipChecker {
             return;
         }
         if (stmt instanceof Ast.DeferStmt defer) {
-            // The callable produced at registration is owned by the callable-level
-            // defer frame until it is invoked at exit.
-            checkExpr(defer.expression(), scope, true);
+            checkExpr(defer.expression(), scope, false);
             return;
         }
         if (stmt instanceof Ast.IfStmt conditional) {
@@ -463,8 +461,13 @@ public final class OwnershipChecker {
     }
 
     private ValueInfo checkLambda(Ast.LambdaExpr lambda, Scope outer, String recursiveBinding) {
-        CaptureSet captures = collectCaptures(lambda, outer, recursiveBinding);
-        Scope closure = new Scope(null);
+        boolean inheritedNonLexical = outer.descendantsNonLexical();
+        if (lambda.explicitLexical() && inheritedNonLexical) {
+            throw error("'lex'/'lexical' lambda cannot override an enclosing nlex capture barrier");
+        }
+        boolean nonLexical = lambda.nonLexical() || inheritedNonLexical;
+        CaptureSet captures = nonLexical ? new CaptureSet() : collectCaptures(lambda, outer, recursiveBinding);
+        Scope closure = new Scope(null, nonLexical);
 
         for (Capture capture : captures.values.values()) {
             VarState source = capture.source;
@@ -506,7 +509,13 @@ public final class OwnershipChecker {
         Set<String> blockLocals = new HashSet<>(locals);
         for (Ast.Stmt stmt : statements) {
             if (stmt instanceof Ast.BindingStmt binding) {
-                scanExpr(binding.initializer(), blockLocals, outer, recursiveBinding, captures, false);
+                if (binding.initializer() instanceof Ast.LambdaExpr) {
+                    Set<String> recursiveLocals = new HashSet<>(blockLocals);
+                    recursiveLocals.add(binding.name());
+                    scanExpr(binding.initializer(), recursiveLocals, outer, recursiveBinding, captures, false);
+                } else {
+                    scanExpr(binding.initializer(), blockLocals, outer, recursiveBinding, captures, false);
+                }
                 blockLocals.add(binding.name());
             } else if (stmt instanceof Ast.DestructureStmt destructure) {
                 scanExpr(destructure.initializer(), blockLocals, outer, recursiveBinding, captures, false);
@@ -514,9 +523,7 @@ public final class OwnershipChecker {
             } else if (stmt instanceof Ast.ReturnStmt ret && ret.value() != null) {
                 scanExpr(ret.value(), blockLocals, outer, recursiveBinding, captures, false);
             } else if (stmt instanceof Ast.ExprStmt e) scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
-            else if (stmt instanceof Ast.DeferStmt e) {
-                scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
-            }
+            else if (stmt instanceof Ast.DeferStmt e) scanExpr(e.expression(), blockLocals, outer, recursiveBinding, captures, false);
             else if (stmt instanceof Ast.IfStmt s) {
                 for (Ast.IfBranch b : s.branches()) {
                     scanExpr(b.condition(), blockLocals, outer, recursiveBinding, captures, false);
@@ -575,8 +582,16 @@ public final class OwnershipChecker {
         else if (expr instanceof Ast.ListExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.TupleExpr e) for (Ast.Expr item : e.elements()) scanExpr(item, locals, outer, recursiveBinding, captures, false);
         else if (expr instanceof Ast.ObjectExpr e) for (Ast.ObjectField field : e.fields()) scanExpr(field.value(), locals, outer, recursiveBinding, captures, false);
-        else if (expr instanceof Ast.LambdaExpr) {
-            // Nested lambda performs its own capture analysis when checked.
+        else if (expr instanceof Ast.LambdaExpr nested) {
+            if (nested.nonLexical()) return;
+            Set<String> nestedLocals = new HashSet<>(locals);
+            for (Ast.Param param : nested.parameters()) nestedLocals.add(param.name());
+            if (nested.expressionBody() != null) {
+                scanExpr(nested.expressionBody(), nestedLocals, outer, recursiveBinding, captures, false);
+            }
+            if (nested.blockBody() != null) {
+                scanStatements(nested.blockBody(), nestedLocals, outer, recursiveBinding, captures);
+            }
         }
     }
 
@@ -774,10 +789,16 @@ public final class OwnershipChecker {
 
     private static final class Scope {
         private final Scope parent;
+        private final boolean descendantsNonLexical;
         private final Map<String,VarState> locals = new LinkedHashMap<>();
         private boolean closed;
 
-        private Scope(Scope parent) { this.parent = parent; }
+        private Scope(Scope parent) { this(parent, parent != null && parent.descendantsNonLexical); }
+        private Scope(Scope parent, boolean descendantsNonLexical) {
+            this.parent = parent;
+            this.descendantsNonLexical = descendantsNonLexical;
+        }
+        private boolean descendantsNonLexical() { return descendantsNonLexical; }
 
         private void define(String name, VarState state) {
             if (locals.putIfAbsent(name, state) != null) throw new IllegalArgumentException("Oreslang ownership error: duplicate binding '" + name + "'");

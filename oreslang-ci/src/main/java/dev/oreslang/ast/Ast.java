@@ -75,20 +75,35 @@ public final class Ast {
             CallableKind kind,
             Visibility visibility,
             boolean async,
+            boolean nonLexical,
+            boolean explicitLexical,
             List<String> genericParameters,
             List<Param> parameters,
             TypeRef returnType,
             List<Annotation> annotations,
             List<Stmt> body) implements Decl {
         public FunctionDecl {
+            if (nonLexical && explicitLexical) {
+                throw new IllegalArgumentException("callable cannot be both lexical and nlex");
+            }
             genericParameters = List.copyOf(genericParameters);
             parameters = List.copyOf(parameters);
             annotations = List.copyOf(annotations);
             body = List.copyOf(body);
         }
+        public FunctionDecl(String name, CallableKind kind, Visibility visibility, boolean async,
+                            boolean nonLexical, List<String> genericParameters, List<Param> parameters,
+                            TypeRef returnType, List<Annotation> annotations, List<Stmt> body) {
+            this(name, kind, visibility, async, nonLexical, false, genericParameters, parameters, returnType, annotations, body);
+        }
+        public FunctionDecl(String name, CallableKind kind, Visibility visibility, boolean async,
+                            List<String> genericParameters, List<Param> parameters, TypeRef returnType,
+                            List<Annotation> annotations, List<Stmt> body) {
+            this(name, kind, visibility, async, false, false, genericParameters, parameters, returnType, annotations, body);
+        }
         public FunctionDecl(String name, Visibility visibility, boolean async, List<String> genericParameters,
                             List<Param> parameters, TypeRef returnType, List<Annotation> annotations, List<Stmt> body) {
-            this(name, CallableKind.FNC, visibility, async, genericParameters, parameters, returnType, annotations, body);
+            this(name, CallableKind.FNC, visibility, async, false, false, genericParameters, parameters, returnType, annotations, body);
         }
     }
 
@@ -179,7 +194,7 @@ public final class Ast {
     public enum BindingKind { CONST, VAL, LET }
 
     public sealed interface Stmt permits BindingStmt, DestructureStmt, ReturnStmt, ExprStmt, DeferStmt,
-            BreakStmt, ContinueStmt, IfStmt, TryStmt, ForOfStmt, ForStmt { }
+            IfStmt, TryStmt, ForOfStmt, ForStmt { }
 
     public record BindingStmt(BindingKind kind, TypeRef declaredType, String name, Expr initializer) implements Stmt { }
     public record DestructureBinding(BindingKind kind, String name) { }
@@ -190,14 +205,7 @@ public final class Ast {
 
     public record ReturnStmt(Expr value) implements Stmt { }
     public record ExprStmt(Expr expression) implements Stmt { }
-    /**
-     * The operand is evaluated immediately at the defer site. Its resulting
-     * value must be a zero-arity callable, which is registered on the enclosing
-     * callable's LIFO defer stack and invoked when that callable exits.
-     */
     public record DeferStmt(Expr expression) implements Stmt { }
-    public record BreakStmt() implements Stmt { }
-    public record ContinueStmt() implements Stmt { }
 
     public record IfBranch(Expr condition, List<Stmt> body) {
         public IfBranch { body = List.copyOf(body); }
@@ -264,10 +272,24 @@ public final class Ast {
         public ObjectExpr { fields = List.copyOf(fields); }
     }
 
-    public record LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody) implements Expr {
+    public record LambdaExpr(
+            List<Param> parameters,
+            Expr expressionBody,
+            List<Stmt> blockBody,
+            boolean nonLexical,
+            boolean explicitLexical) implements Expr {
         public LambdaExpr {
+            if (nonLexical && explicitLexical) {
+                throw new IllegalArgumentException("lambda cannot be both lexical and nlex");
+            }
             parameters = List.copyOf(parameters);
             blockBody = blockBody == null ? null : List.copyOf(blockBody);
+        }
+        public LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody, boolean nonLexical) {
+            this(parameters, expressionBody, blockBody, nonLexical, false);
+        }
+        public LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody) {
+            this(parameters, expressionBody, blockBody, false, false);
         }
     }
 }

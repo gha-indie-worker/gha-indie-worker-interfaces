@@ -45,7 +45,6 @@ public final class TypeChecker {
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 
     public static Ast.Program check(Ast.Program program) {
-        ReservedIdentifierValidator.check(program);
         TypeChecker checker = new TypeChecker();
         checker.validateImports(program);
         checker.collect(program);
@@ -106,7 +105,6 @@ public final class TypeChecker {
     }
 
     private void validate(Ast.Program program) {
-        validateLoopControl(program);
         for (Ast.ClassDecl klass : classOwners.keySet()) classShape(klass, new LinkedHashSet<>());
         for (Ast.InterfaceDecl iface : interfaceOwners.keySet()) interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
 
@@ -119,104 +117,6 @@ public final class TypeChecker {
                 else if (decl instanceof Ast.TypeAliasDecl alias) resolve(alias.target(), Set.copyOf(alias.genericParameters()), null);
                 else if (decl instanceof Ast.FieldDecl field) checkModuleBinding(field);
             }
-        }
-    }
-
-    private void validateLoopControl(Ast.Program program) {
-        for (Ast.ModuleDecl module : program.modules()) {
-            for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl fn) {
-                    validateLoopControlBlock(fn.body(), 0);
-                } else if (decl instanceof Ast.ClassDecl klass) {
-                    for (Ast.MethodDecl method : klass.methods()) {
-                        validateLoopControlBlock(method.body(), 0);
-                    }
-                    for (Ast.FieldDecl field : klass.fields()) {
-                        if (field.initializer() != null) validateLoopControlExpr(field.initializer());
-                    }
-                } else if (decl instanceof Ast.FieldDecl field && field.initializer() != null) {
-                    validateLoopControlExpr(field.initializer());
-                }
-            }
-        }
-    }
-
-    private void validateLoopControlBlock(List<Ast.Stmt> body, int loopDepth) {
-        for (Ast.Stmt stmt : body) {
-            if (stmt instanceof Ast.BreakStmt) {
-                if (loopDepth == 0) throw new IllegalArgumentException("'break' is only valid inside a loop");
-                continue;
-            }
-            if (stmt instanceof Ast.ContinueStmt) {
-                if (loopDepth == 0) throw new IllegalArgumentException("'continue' is only valid inside a loop");
-                continue;
-            }
-            if (stmt instanceof Ast.BindingStmt binding) {
-                validateLoopControlExpr(binding.initializer());
-            } else if (stmt instanceof Ast.DestructureStmt destructure) {
-                validateLoopControlExpr(destructure.initializer());
-            } else if (stmt instanceof Ast.ReturnStmt ret && ret.value() != null) {
-                validateLoopControlExpr(ret.value());
-            } else if (stmt instanceof Ast.ExprStmt expression) {
-                validateLoopControlExpr(expression.expression());
-            } else if (stmt instanceof Ast.DeferStmt defer) {
-                validateLoopControlExpr(defer.expression());
-            } else if (stmt instanceof Ast.IfStmt conditional) {
-                for (Ast.IfBranch branch : conditional.branches()) {
-                    validateLoopControlExpr(branch.condition());
-                    validateLoopControlBlock(branch.body(), loopDepth);
-                }
-                validateLoopControlBlock(conditional.elseBody(), loopDepth);
-            } else if (stmt instanceof Ast.TryStmt attempted) {
-                validateLoopControlBlock(attempted.body(), loopDepth);
-                validateLoopControlBlock(attempted.catchBody(), loopDepth);
-                validateLoopControlBlock(attempted.finallyBody(), loopDepth);
-            } else if (stmt instanceof Ast.ForOfStmt loop) {
-                validateLoopControlExpr(loop.iterable());
-                validateLoopControlBlock(loop.body(), loopDepth + 1);
-            } else if (stmt instanceof Ast.ForStmt loop) {
-                if (loop.initializer() != null) validateLoopControlBlock(List.of(loop.initializer()), loopDepth);
-                if (loop.condition() != null) validateLoopControlExpr(loop.condition());
-                if (loop.update() != null) validateLoopControlExpr(loop.update());
-                validateLoopControlBlock(loop.body(), loopDepth + 1);
-            }
-        }
-    }
-
-    private void validateLoopControlExpr(Ast.Expr expr) {
-        if (expr instanceof Ast.BinaryExpr e) {
-            validateLoopControlExpr(e.left());
-            validateLoopControlExpr(e.right());
-        } else if (expr instanceof Ast.UnaryExpr e) {
-            validateLoopControlExpr(e.operand());
-        } else if (expr instanceof Ast.AssignExpr e) {
-            validateLoopControlExpr(e.target());
-            validateLoopControlExpr(e.value());
-        } else if (expr instanceof Ast.ConditionalExpr e) {
-            validateLoopControlExpr(e.condition());
-            validateLoopControlExpr(e.whenTrue());
-            validateLoopControlExpr(e.whenFalse());
-        } else if (expr instanceof Ast.CallExpr e) {
-            validateLoopControlExpr(e.callee());
-            for (Ast.Expr argument : e.arguments()) validateLoopControlExpr(argument);
-        } else if (expr instanceof Ast.MemberExpr e) {
-            validateLoopControlExpr(e.receiver());
-        } else if (expr instanceof Ast.IndexExpr e) {
-            validateLoopControlExpr(e.receiver());
-            validateLoopControlExpr(e.index());
-        } else if (expr instanceof Ast.NewExpr e) {
-            for (Ast.Expr argument : e.arguments()) validateLoopControlExpr(argument);
-        } else if (expr instanceof Ast.AwaitExpr e) {
-            validateLoopControlExpr(e.expression());
-        } else if (expr instanceof Ast.ListExpr e) {
-            for (Ast.Expr item : e.elements()) validateLoopControlExpr(item);
-        } else if (expr instanceof Ast.TupleExpr e) {
-            for (Ast.Expr item : e.elements()) validateLoopControlExpr(item);
-        } else if (expr instanceof Ast.ObjectExpr e) {
-            for (Ast.ObjectField field : e.fields()) validateLoopControlExpr(field.value());
-        } else if (expr instanceof Ast.LambdaExpr e) {
-            // A lambda is a new callable boundary: it cannot break/continue an outer loop.
-            validateLoopControlBlock(e.blockBody(), 0);
         }
     }
 
@@ -277,7 +177,7 @@ public final class TypeChecker {
 
     private void checkFunction(String module, Ast.FunctionDecl fn) {
         Set<String> generics = uniqueGenerics(fn.genericParameters(), (fn.kind() == Ast.CallableKind.ROUTINE ? "routine " : "function ") + fn.name());
-        Env env = new Env(null);
+        Env env = new Env(null, fn.nonLexical());
         for (Ast.Param param : fn.parameters()) env.define(param.name(), resolveParam(param, generics, null), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
         Type returns = resolve(fn.returnType(), generics, null);
         checkBlock(fn.body(), env, generics, returns, null);
@@ -313,7 +213,7 @@ public final class TypeChecker {
         for (Ast.FieldDecl field : klass.fields()) {
             Type fieldType = resolve(field.type(), classGenerics, self);
             if (field.initializer() != null) {
-                Type actual = typeOfWithExpected(field.initializer(), fieldType, new Env(null), classGenerics, self);
+                Type actual = typeOf(field.initializer(), new Env(null), classGenerics, self);
                 requireAssignable(actual, fieldType, "field initializer " + klass.name() + "." + field.name());
             }
             if (field.bindingKind() == Ast.BindingKind.CONST && field.initializer() != null && !constant(field.initializer())) {
@@ -363,11 +263,8 @@ public final class TypeChecker {
 
     private void checkModuleBinding(Ast.FieldDecl field) {
         if (field.initializer() == null) throw new IllegalArgumentException("module binding '" + field.name() + "' requires an initializer");
-        Type declared = field.type() == null ? null : resolve(field.type(), Set.of(), null);
-        Type actual = declared == null
-                ? typeOf(field.initializer(), new Env(null), Set.of(), null)
-                : typeOfWithExpected(field.initializer(), declared, new Env(null), Set.of(), null);
-        if (declared != null) requireAssignable(actual, declared, "initializer for " + field.name());
+        Type actual = typeOf(field.initializer(), new Env(null), Set.of(), null);
+        if (field.type() != null) requireAssignable(actual, resolve(field.type(), Set.of(), null), "initializer for " + field.name());
         if (field.bindingKind() == Ast.BindingKind.CONST && !constant(field.initializer())) {
             throw new IllegalArgumentException("const '" + field.name() + "' needs a compile-time constant initializer");
         }
@@ -418,11 +315,7 @@ public final class TypeChecker {
             return;
         }
         if (stmt instanceof Ast.ExprStmt expression) { typeOf(expression.expression(), env, generics, self); return; }
-        if (stmt instanceof Ast.BreakStmt || stmt instanceof Ast.ContinueStmt) return;
-        if (stmt instanceof Ast.DeferStmt defer) {
-            checkDefer(defer, env, generics, self);
-            return;
-        }
+        if (stmt instanceof Ast.DeferStmt defer) { typeOf(defer.expression(), env, generics, self); return; }
         if (stmt instanceof Ast.IfStmt conditional) {
             for (Ast.IfBranch branch : conditional.branches()) {
                 requireAssignable(typeOf(branch.condition(), env, generics, self), Primitive.BOOL, "if condition");
@@ -453,14 +346,6 @@ public final class TypeChecker {
             if (loop.condition() != null) requireAssignable(typeOf(loop.condition(), loopEnv, generics, self), Primitive.BOOL, "for condition");
             if (loop.update() != null) typeOf(loop.update(), loopEnv, generics, self);
             checkBlock(loop.body(), loopEnv, generics, expectedReturn, self);
-        }
-    }
-
-    private void checkDefer(Ast.DeferStmt defer, Env env, Set<String> generics, Type self) {
-        Type produced = typeOf(defer.expression(), env, generics, self);
-        if (!(produced instanceof Function fn) || !fn.parameters().isEmpty()) {
-            throw new IllegalArgumentException(
-                    "defer evaluates its operand immediately; the result must be an arity-0 function, got " + produced);
         }
     }
 
@@ -511,7 +396,7 @@ public final class TypeChecker {
                 else throw new IllegalArgumentException("indexed assignment requires an array/list or tuple");
                 where = "index";
             } else throw new IllegalArgumentException("unsupported assignment target");
-            Type value = typeOfWithExpected(assignment.value(), targetType, env, generics, self);
+            Type value = typeOf(assignment.value(), env, generics, self);
             requireAssignable(value, targetType, "assignment to " + where);
             return targetType;
         }
@@ -569,8 +454,8 @@ public final class TypeChecker {
                     fnGenerics.addAll(fn.genericParameters());
                     for (int i = 0; i < call.arguments().size(); i++) {
                         Type expected = resolveParam(fn.parameters().get(i), fnGenerics, null);
-                        Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                        requireAssignable(actual, expected, "argument " + (i + 1));
+                        requireAssignable(typeOfWithExpected(call.arguments().get(i), expected, env, generics, self),
+                                expected, "argument " + (i + 1));
                     }
                     return resolve(fn.returnType(), fnGenerics, null);
                 }
@@ -583,8 +468,8 @@ public final class TypeChecker {
                         methodGenerics.addAll(method.genericParameters());
                         for (int i = 0; i < call.arguments().size(); i++) {
                             Type expected = resolveParam(method.parameters().get(i), methodGenerics, named);
-                            Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                            requireAssignable(actual, expected, "argument " + (i + 1));
+                            requireAssignable(typeOfWithExpected(call.arguments().get(i), expected, env, generics, self),
+                                    expected, "argument " + (i + 1));
                         }
                         return resolve(method.returnType(), methodGenerics, named);
                     }
@@ -594,9 +479,8 @@ public final class TypeChecker {
             if (!(callee instanceof Function fn)) return Unknown.INSTANCE;
             if (fn.parameters().size() != call.arguments().size()) throw new IllegalArgumentException("call arity mismatch");
             for (int i = 0; i < fn.parameters().size(); i++) {
-                Type expected = fn.parameters().get(i);
-                Type actual = typeOfWithExpected(call.arguments().get(i), expected, env, generics, self);
-                requireAssignable(actual, expected, "argument " + (i + 1));
+                requireAssignable(typeOfWithExpected(call.arguments().get(i), fn.parameters().get(i), env, generics, self),
+                        fn.parameters().get(i), "argument " + (i + 1));
             }
             return fn.result();
         }
@@ -697,7 +581,12 @@ public final class TypeChecker {
             return new Record(members);
         }
         if (expr instanceof Ast.LambdaExpr lambda) {
-            Env lambdaEnv = new Env(env);
+            boolean inheritedNonLexical = env.descendantsNonLexical();
+            if (lambda.explicitLexical() && inheritedNonLexical) {
+                throw new IllegalArgumentException("'lex'/'lexical' lambda cannot override an enclosing nlex capture barrier");
+            }
+            boolean nonLexical = lambda.nonLexical() || inheritedNonLexical;
+            Env lambdaEnv = new Env(nonLexical ? null : env, nonLexical);
             List<Type> parameters = new ArrayList<>();
             for (Ast.Param param : lambda.parameters()) {
                 Type type = resolveParam(param, generics, self);
@@ -707,122 +596,17 @@ public final class TypeChecker {
             if (lambda.expressionBody() != null) {
                 throw new IllegalArgumentException("expression-body lambdas are not supported; lambdas require braces and explicit return");
             }
-            LambdaReturnSummary returns = checkLambdaBlockAndInferReturns(lambda.blockBody(), lambdaEnv, generics, self);
-            Type result = returns.hasReturn() ? returns.type() : Primitive.VOID;
-            if (result != Primitive.VOID && !definitelyReturns(lambda.blockBody())) {
-                throw new IllegalArgumentException("inferred non-void lambda must explicitly return on every path");
-            }
-            return new Function(parameters, result);
+            checkBlock(lambda.blockBody(), lambdaEnv, generics, Unknown.INSTANCE, self);
+            return new Function(parameters, Unknown.INSTANCE);
         }
         return Unknown.INSTANCE;
     }
 
-    private record LambdaReturnSummary(boolean hasReturn, Type type) {
-        private static LambdaReturnSummary none() { return new LambdaReturnSummary(false, Primitive.VOID); }
-        private static LambdaReturnSummary of(Type type) { return new LambdaReturnSummary(true, type); }
-    }
-
-    private LambdaReturnSummary checkLambdaBlockAndInferReturns(
-            List<Ast.Stmt> body,
-            Env parent,
-            Set<String> generics,
-            Type self) {
-        Env env = new Env(parent);
-        LambdaReturnSummary inferred = LambdaReturnSummary.none();
-
-        for (Ast.Stmt stmt : body) {
-            inferred = mergeLambdaReturns(inferred, inferredReturnFromStatement(stmt, env, generics, self));
-            checkStatement(stmt, env, generics, Unknown.INSTANCE, self);
-        }
-        return inferred;
-    }
-
-    private LambdaReturnSummary inferredReturnFromStatement(
-            Ast.Stmt stmt,
-            Env env,
-            Set<String> generics,
-            Type self) {
-        if (stmt instanceof Ast.ReturnStmt ret) {
-            return LambdaReturnSummary.of(ret.value() == null
-                    ? Primitive.VOID
-                    : typeOf(ret.value(), env, generics, self));
-        }
-        if (stmt instanceof Ast.IfStmt conditional) {
-            LambdaReturnSummary result = LambdaReturnSummary.none();
-            for (Ast.IfBranch branch : conditional.branches()) {
-                result = mergeLambdaReturns(
-                        result,
-                        checkLambdaBlockAndInferReturns(branch.body(), env, generics, self));
-            }
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(conditional.elseBody(), env, generics, self));
-            return result;
-        }
-        if (stmt instanceof Ast.TryStmt attempted) {
-            LambdaReturnSummary result = checkLambdaBlockAndInferReturns(
-                    attempted.body(), env, generics, self);
-
-            Env caught = new Env(env);
-            caught.define(attempted.errorName(), Unknown.INSTANCE, Ast.BindingKind.VAL);
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(attempted.catchBody(), caught, generics, self));
-
-            result = mergeLambdaReturns(
-                    result,
-                    checkLambdaBlockAndInferReturns(attempted.finallyBody(), env, generics, self));
-            return result;
-        }
-        if (stmt instanceof Ast.ForOfStmt loop) {
-            Env loopEnv = new Env(env);
-            loopEnv.define(
-                    loop.bindingName(),
-                    iterableElementType(typeOf(loop.iterable(), env, generics, self)),
-                    loop.bindingKind());
-            return checkLambdaBlockAndInferReturns(loop.body(), loopEnv, generics, self);
-        }
-        if (stmt instanceof Ast.ForStmt loop) {
-            Env loopEnv = new Env(env);
-            if (loop.initializer() != null) {
-                checkStatement(loop.initializer(), loopEnv, generics, Unknown.INSTANCE, self);
-            }
-            return checkLambdaBlockAndInferReturns(loop.body(), loopEnv, generics, self);
-        }
-        return LambdaReturnSummary.none();
-    }
-
-    private LambdaReturnSummary mergeLambdaReturns(
-            LambdaReturnSummary left,
-            LambdaReturnSummary right) {
-        if (!left.hasReturn()) return right;
-        if (!right.hasReturn()) return left;
-        if ((left.type() == Primitive.VOID) != (right.type() == Primitive.VOID)) {
-            throw new IllegalArgumentException("lambda cannot mix 'return;' with value-returning paths");
-        }
-        return LambdaReturnSummary.of(commonType(left.type(), right.type()));
-    }
-
-    private Type typeOfWithExpected(
-            Ast.Expr expression,
-            Type expected,
-            Env env,
-            Set<String> generics,
-            Type self) {
+    private Type typeOfWithExpected(Ast.Expr expression, Type expected, Env env, Set<String> generics, Type self) {
         if (expression instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
             validateLambdaAgainstExpected(lambda, fn, env, generics, self);
             return fn;
         }
-
-        if (expression instanceof Ast.ConditionalExpr conditional && expected instanceof Function) {
-            requireAssignable(typeOf(conditional.condition(), env, generics, self), Primitive.BOOL, "ternary condition");
-            Type whenTrue = typeOfWithExpected(conditional.whenTrue(), expected, env, generics, self);
-            Type whenFalse = typeOfWithExpected(conditional.whenFalse(), expected, env, generics, self);
-            requireAssignable(whenTrue, expected, "ternary true branch");
-            requireAssignable(whenFalse, expected, "ternary false branch");
-            return expected;
-        }
-
         return typeOf(expression, env, generics, self);
     }
 
@@ -833,7 +617,12 @@ public final class TypeChecker {
         if (lambda.parameters().size() != expected.parameters().size()) {
             throw new IllegalArgumentException("lambda arity " + lambda.parameters().size() + " does not match expected function arity " + expected.parameters().size());
         }
-        Env lambdaEnv = new Env(parent);
+        boolean inheritedNonLexical = parent.descendantsNonLexical();
+        if (lambda.explicitLexical() && inheritedNonLexical) {
+            throw new IllegalArgumentException("'lex'/'lexical' lambda cannot override an enclosing nlex capture barrier");
+        }
+        boolean nonLexical = lambda.nonLexical() || inheritedNonLexical;
+        Env lambdaEnv = new Env(nonLexical ? null : parent, nonLexical);
         for (int i = 0; i < lambda.parameters().size(); i++) {
             Ast.Param param = lambda.parameters().get(i);
             Type expectedParam = expected.parameters().get(i);
@@ -1414,8 +1203,14 @@ public final class TypeChecker {
 
     private static final class Env {
         private final Env parent;
+        private final boolean descendantsNonLexical;
         private final Map<String, Binding> bindings = new HashMap<>();
-        private Env(Env parent) { this.parent = parent; }
+        private Env(Env parent) { this(parent, parent != null && parent.descendantsNonLexical); }
+        private Env(Env parent, boolean descendantsNonLexical) {
+            this.parent = parent;
+            this.descendantsNonLexical = descendantsNonLexical;
+        }
+        private boolean descendantsNonLexical() { return descendantsNonLexical; }
         private void define(String name, Type type, Ast.BindingKind kind) {
             if (bindings.putIfAbsent(name, new Binding(type, kind)) != null) throw new IllegalArgumentException("duplicate binding '" + name + "'");
         }
