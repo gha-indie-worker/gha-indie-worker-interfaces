@@ -121,20 +121,31 @@ final class LifecycleEntrypointTest {
     }
 
     @Test
-    void lifecycleNamesCannotBeImportedIntoFileScope() {
-        assertReservedLifecycleName("""
-                import fnc {main} from "./entry.ores";
+    void lifecycleFunctionsMayBeImportedByTheirReservedNames() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                import fnc {main, init} from "./entry.ores";
+
                 pub routine launch() => void {
                   return;
                 }
-                """, "main");
+                """)));
+    }
 
+    @Test
+    void lifecycleNamesCannotBeUsedAsWildcardOrNonFunctionImportBindings() {
         assertReservedLifecycleName("""
                 import * as init from "./lifecycle.ores";
                 pub routine launch() => void {
                   return;
                 }
                 """, "init");
+
+        assertReservedLifecycleName("""
+                import class {main} from "./types.ores";
+                pub routine launch() => void {
+                  return;
+                }
+                """, "main");
     }
 
     @Test
