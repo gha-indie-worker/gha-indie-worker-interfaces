@@ -485,6 +485,11 @@ public final class TypeChecker {
             Set<String> generics,
             Type expectedReturn,
             Type self) {
+        if (recover.handler() instanceof Ast.LambdaExpr lambda && lambda.parameters().size() != 1) {
+            throw new IllegalArgumentException(
+                    "recover evaluates its handler immediately; the result must be an arity-1 function");
+        }
+
         Function expected = new Function(List.of(Unknown.INSTANCE), expectedReturn);
         Type produced = typeOfWithExpected(recover.handler(), expected, env, generics, self);
         if (!(produced instanceof Function fn) || fn.parameters().size() != 1) {
