@@ -151,4 +151,62 @@ final class ActorRuntimeTest {
             isolated.join();
         }
     }
+
+    @Test
+    void stopAtomicallyRejectsLaterSends() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch started = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+
+            var ref = runtime.<String>spawn(() -> (message, context) -> {
+                started.countDown();
+                assertTrue(release.await(2, TimeUnit.SECONDS));
+            });
+
+            ref.send("accepted");
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+
+            ref.stop();
+            assertThrows(IllegalStateException.class, () -> ref.send("too-late"));
+
+            release.countDown();
+            ref.join();
+            assertFalse(ref.isAlive());
+        }
+    }
+
+    @Test
+    void stopDrainsFullMailboxEvenWithoutSpaceForStopSentinel() throws Exception {
+        IsolatePolicy ceiling = IsolatePolicy.developer();
+        IsolatePolicy oneMessageMailbox = new IsolatePolicy(
+                ceiling.capabilities(),
+                ceiling.maxHeapBytes(),
+                1,
+                ceiling.maxWallTime(),
+                ceiling.adversarial());
+
+        try (ActorRuntime runtime = new ActorRuntime(ceiling)) {
+            CountDownLatch firstStarted = new CountDownLatch(1);
+            CountDownLatch releaseFirst = new CountDownLatch(1);
+            CountDownLatch delivered = new CountDownLatch(2);
+
+            var ref = runtime.<String>spawn(oneMessageMailbox, () -> (message, context) -> {
+                if (message.equals("one")) {
+                    firstStarted.countDown();
+                    assertTrue(releaseFirst.await(2, TimeUnit.SECONDS));
+                }
+                delivered.countDown();
+            });
+
+            ref.send("one");
+            assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
+            ref.send("two"); // fills the one-slot mailbox
+            ref.stop();      // no room for STOP sentinel; stopRequested must still work
+            releaseFirst.countDown();
+
+            ref.join();
+            assertEquals(0, delivered.getCount());
+            assertFalse(ref.failed());
+        }
+    }
 }
