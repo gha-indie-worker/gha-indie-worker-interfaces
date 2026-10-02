@@ -1,9 +1,9 @@
-name: oreslang-pr16-external-ci
+name: oreslang-pr43-singleton-audit-external-ci
 
 on:
   push:
     branches:
-      - ci/oreslang-actor-recover
+      - ci/oreslang-pr43-singleton-audit
   pull_request:
     branches:
       - main
