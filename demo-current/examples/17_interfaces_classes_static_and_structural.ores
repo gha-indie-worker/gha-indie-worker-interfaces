@@ -21,15 +21,9 @@ fnc print_named(Named value) => void {
   return;
 }
 
-fnc print_structural(@Structural Named value) => void {
-  stdio.println(value.name());
-  return;
-}
-
 pub routine main() => void {
   val user = new User();
   print_named(user);
-  print_structural(user);
   stdio.println(User.kind());
   return;
 }
