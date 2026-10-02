@@ -1,0 +1,23 @@
+namespace mut_destructure_demo;
+
+fnc bump(int mut value) => int {
+  value = value + 1;
+  return value;
+}
+
+fnc status() => [int, bool, string] {
+  return [41, true, "ready"];
+}
+
+pub routine main() => void {
+  let counter = 1;
+  counter = bump(counter);
+
+  [const number, flag, answer] = status();
+
+  stdio.println(counter);
+  stdio.println(number);
+  stdio.println(flag);
+  stdio.println(answer);
+  return;
+}

@@ -1,0 +1,53 @@
+name: oreslang-demo-pr15-current-main-ci
+
+on:
+  push:
+    branches:
+      - ci/oreslang-demo-pr15-current-main-20261002
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify exact current Oreslang source main
+        run: |
+          echo "source main: 9b70436629502ef42954ab1cd8785c63c3dcd8be"
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work/oreslang-current \
+            maven:3.9.11-eclipse-temurin-21 \
+            mvn -B -ntp verify
+
+      - name: Run merged demo corpus plus PR 15 and PR 3 examples
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work/oreslang-current \
+            maven:3.9.11-eclipse-temurin-21 \
+            bash -lc '
+              set -euo pipefail
+              for example in /work/demo-current/examples/*.ores; do
+                echo "==> $example"
+                mvn -B -ntp -q -DskipTests compile exec:java -Dexec.args="$example"
+              done
+            '
+
+      - name: Run PR 15 keyword examples against current main
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work/oreslang-current \
+            maven:3.9.11-eclipse-temurin-21 \
+            bash -lc '
+              set -euo pipefail
+              for example in /work/demo-current/examples/keywords/*.ores; do
+                echo "==> $example"
+                mvn -B -ntp -q -DskipTests compile exec:java -Dexec.args="$example"
+              done
+            '
