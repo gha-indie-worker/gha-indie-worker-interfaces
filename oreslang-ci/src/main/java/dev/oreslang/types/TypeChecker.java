@@ -551,12 +551,31 @@ public final class TypeChecker {
         }
 
         Function expected = new Function(List.of(Unknown.INSTANCE), expectedReturn);
-        Type produced = typeOfWithExpected(recover.handler(), expected, env, generics, self);
+        Type produced;
+        try {
+            produced = typeOfWithExpected(recover.handler(), expected, env, generics, self);
+        } catch (IllegalArgumentException failure) {
+            if (recover.handler() instanceof Ast.LambdaExpr
+                    && isRecoverHandlerResultFailure(failure.getMessage())) {
+                throw new IllegalArgumentException(
+                        "recover handler result: " + failure.getMessage(),
+                        failure);
+            }
+            throw failure;
+        }
+
         if (!(produced instanceof Function fn) || fn.parameters().size() != 1) {
             throw new IllegalArgumentException(
                     "recover evaluates its handler immediately; the result must be an arity-1 function, got " + produced);
         }
         requireAssignable(fn.result(), expectedReturn, "recover handler result");
+    }
+
+    private boolean isRecoverHandlerResultFailure(String message) {
+        if (message == null) return false;
+        return message.contains("return value")
+                || message.contains("non-void lambda")
+                || message.contains("lambda cannot mix");
     }
 
     private Type typeOf(Ast.Expr expr, Env env, Set<String> generics, Type self) {
