@@ -934,7 +934,14 @@ public final class Parser {
 
     private Token consume(Token.Type type, String message) {
         if (check(type)) return advance();
+        if (type == IDENT && isReservedIdentifierKeyword(peek().type())) {
+            throw error(peek(), "reserved keyword '" + peek().lexeme() + "' cannot be used as an identifier");
+        }
         throw error(peek(), message);
+    }
+
+    private boolean isReservedIdentifierKeyword(Token.Type type) {
+        return type == AS || type == IS || type == OF;
     }
 
     private boolean check(Token.Type type) { return peek().type() == type; }
