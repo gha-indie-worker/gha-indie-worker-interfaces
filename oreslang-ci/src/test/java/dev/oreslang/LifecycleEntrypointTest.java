@@ -36,6 +36,43 @@ final class LifecycleEntrypointTest {
     }
 
     @Test
+    void sourceFileMayDeclareOnlyOneMainAcrossRootAndModules() {
+        IllegalArgumentException moduleConflict = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        define module first
+                          pub routine main() => void {
+                            return;
+                          }
+                        end
+
+                        define module second
+                          pub fnc main() => void {
+                            return;
+                          }
+                        end
+                        """)));
+
+        assertTrue(moduleConflict.getMessage().contains("at most one main lifecycle callable"));
+
+        IllegalArgumentException rootAndModuleConflict = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        pub routine main() => void {
+                          return;
+                        }
+
+                        define module app
+                          pub fnc main() => void {
+                            return;
+                          }
+                        end
+                        """)));
+
+        assertTrue(rootAndModuleConflict.getMessage().contains("at most one main lifecycle callable"));
+    }
+
+    @Test
     void separateModulesMayEachDeclareTheirOwnInitHook() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
                 define module first
@@ -67,6 +104,23 @@ final class LifecycleEntrypointTest {
                   }
                 end
                 """, "main");
+    }
+
+    @Test
+    void lifecycleActorRestrictionCoversSharedAndIsolateModes() {
+        assertLifecycleActorRejected("""
+                pub actor isolate routine main() => void {
+                  return;
+                }
+                """, "main");
+
+        assertLifecycleActorRejected("""
+                define module app
+                  actor fnc init() => void {
+                    return;
+                  }
+                end
+                """, "init");
     }
 
     @Test
