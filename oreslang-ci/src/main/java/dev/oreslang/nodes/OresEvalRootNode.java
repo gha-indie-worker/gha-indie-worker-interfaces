@@ -53,6 +53,8 @@ public final class OresEvalRootNode extends RootNode {
         private final Set<String> ambiguousFunctions = new LinkedHashSet<>();
         private final Set<String> ambiguousClasses = new LinkedHashSet<>();
 
+        private StartupPhase startupPhase = StartupPhase.LINKED;
+
         private Evaluator(Ast.Program program, OresContext context) {
             this.program = program;
             this.context = context;
@@ -89,12 +91,53 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object execute(Object[] arguments) {
+            runInitializers();
+
             Ast.FunctionDecl main = findFunction("main");
             if (main == null) return null;
             return callFunction(main, List.of(arguments));
         }
 
+        private void runInitializers() {
+            if (startupPhase == StartupPhase.READY) return;
+            if (startupPhase == StartupPhase.INITIALIZING) {
+                throw new IllegalStateException("recursive program initialization is not allowed");
+            }
+            if (startupPhase == StartupPhase.FAILED) {
+                throw new IllegalStateException("program initialization previously failed");
+            }
+
+            startupPhase = StartupPhase.INITIALIZING;
+            try {
+                // indexDeclarations() already linked every declaration in every module.
+                // No init runs until that complete-program link phase has finished.
+                for (Ast.ModuleDecl module : program.modules()) {
+                    for (Ast.Decl decl : module.declarations()) {
+                        if (decl instanceof Ast.FunctionDecl fn && fn.name().equals("init")) {
+                            invokeFunctionBody(fn, List.of());
+                        }
+                    }
+                }
+                startupPhase = StartupPhase.READY;
+            } catch (RuntimeException | Error failure) {
+                startupPhase = StartupPhase.FAILED;
+                throw failure;
+            }
+        }
+
         private Object callFunction(Ast.FunctionDecl fn, List<?> args) {
+            if (fn.name().equals("init")) {
+                throw new IllegalStateException(
+                        "init is a lifecycle hook and cannot be invoked directly; it runs exactly once during startup");
+            }
+            if (startupPhase == StartupPhase.LINKED) {
+                throw new IllegalStateException(
+                        "ordinary callables cannot run before the initialization barrier");
+            }
+            if (startupPhase == StartupPhase.FAILED) {
+                throw new IllegalStateException(
+                        "ordinary callables cannot run after initialization failure");
+            }
             if (args.size() != fn.parameters().size()) {
                 if (fn.parameters().isEmpty() && args.size() == 1 && args.getFirst() instanceof Object[] array && array.length == 0) args = List.of();
                 else throw new IllegalArgumentException("function " + fn.name() + " expects " + fn.parameters().size() + " arguments, got " + args.size());
@@ -819,6 +862,13 @@ public final class OresEvalRootNode extends RootNode {
     }
 
     @FunctionalInterface private interface Invokable { Object call(List<Object> arguments); }
+
+    private enum StartupPhase {
+        LINKED,
+        INITIALIZING,
+        READY,
+        FAILED
+    }
 
     private static final class CallFrame {
         private final ArrayDeque<Invokable> deferred = new ArrayDeque<>();
