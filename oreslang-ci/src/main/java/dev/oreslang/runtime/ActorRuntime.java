@@ -4,7 +4,10 @@ import java.lang.reflect.Array;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,6 +28,10 @@ import java.util.function.Supplier;
  * Frozen values rather than sharing Java object references.
  */
 public final class ActorRuntime implements AutoCloseable {
+    private static final int MAX_FREEZE_DEPTH = 256;
+    private static final int MAX_FREEZE_NODES = 100_000;
+    private static final long MAX_FREEZE_BYTES = 16L * 1024 * 1024;
+
     private final Map<ActorId, ActorCell<?>> actors = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final IsolatePolicy policyCeiling;
@@ -67,6 +74,10 @@ public final class ActorRuntime implements AutoCloseable {
 
         public void send(M message) {
             ActorRuntime.this.send(this, message);
+        }
+
+        private boolean belongsTo(ActorRuntime runtime) {
+            return ActorRuntime.this == runtime;
         }
 
         @Override
@@ -119,7 +130,7 @@ public final class ActorRuntime implements AutoCloseable {
         if (closed.get()) throw new IllegalStateException("actor runtime is closed");
         ActorCell<M> cell = (ActorCell<M>) actors.get(ref.id());
         if (cell == null) throw new IllegalStateException("unknown actor " + ref.id());
-        Object frozen = freeze(message);
+        Object frozen = freezeForThisRuntime(message);
         if (!cell.mailbox.offer(frozen)) {
             throw new IllegalStateException("actor mailbox limit exceeded for " + ref.id());
         }
@@ -143,7 +154,7 @@ public final class ActorRuntime implements AutoCloseable {
 
     @SuppressWarnings("unchecked")
     public <T> Shared<T> shareReadonly(T value) {
-        return new Shared<>((T) freeze(value));
+        return new Shared<>((T) freezeForThisRuntime(value));
     }
 
     /**
@@ -151,41 +162,155 @@ public final class ActorRuntime implements AutoCloseable {
      * Unknown host objects are rejected instead of being passed by reference.
      */
     public static Object freeze(Object value) {
-        if (value == null || value instanceof String || value instanceof Boolean || value instanceof Character
-                || value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long
-                || value instanceof Float || value instanceof Double || value instanceof BigInteger || value instanceof BigDecimal
-                || value instanceof Enum<?> || value instanceof UUID || value instanceof ActorId) {
+        return freeze(value, new IdentityHashMap<>(), new FreezeBudget(), 0, null);
+    }
+
+    private Object freezeForThisRuntime(Object value) {
+        return freeze(value, new IdentityHashMap<>(), new FreezeBudget(), 0, this);
+    }
+
+    private static Object freeze(
+            Object value,
+            IdentityHashMap<Object, Boolean> path,
+            FreezeBudget budget,
+            int depth,
+            ActorRuntime allowedActorRuntime) {
+        if (depth > MAX_FREEZE_DEPTH) {
+            throw new IllegalArgumentException("actor message exceeds maximum nesting depth " + MAX_FREEZE_DEPTH);
+        }
+        budget.addNode();
+
+        if (value == null) {
+            budget.addBytes(1);
+            return null;
+        }
+        if (value instanceof String text) {
+            budget.addBytes(16L + 2L * text.length());
             return value;
         }
-        if (value instanceof Shared<?> shared) return shared;
-        if (value instanceof ActorRef<?> ref) return ref;
+        if (value instanceof BigInteger integer) {
+            budget.addBytes(32L + Math.max(1L, (integer.bitLength() + 7L) / 8L));
+            return value;
+        }
+        if (value instanceof BigDecimal decimal) {
+            budget.addBytes(40L + Math.max(1L, (decimal.unscaledValue().bitLength() + 7L) / 8L));
+            return value;
+        }
+        if (value instanceof Boolean || value instanceof Character
+                || value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long
+                || value instanceof Float || value instanceof Double
+                || value instanceof Enum<?> || value instanceof UUID || value instanceof ActorId) {
+            budget.addBytes(32);
+            return value;
+        }
+        budget.addBytes(24);
+
+        if (value instanceof OresValues.Complex) {
+            return value;
+        }
+        if (value instanceof OresValues.OptionValue option) {
+            if (!option.present()) return option;
+            return new OresValues.OptionValue(
+                    true,
+                    freeze(option.value(), path, budget, depth + 1, allowedActorRuntime));
+        }
+
+        /*
+         * Shared is public host API, so do not trust an externally constructed
+         * Shared wrapper to already contain frozen data. Re-freeze its payload.
+         */
+        if (value instanceof Shared<?> shared) {
+            return new Shared<>(freeze(shared.value(), path, budget, depth + 1, allowedActorRuntime));
+        }
+        if (value instanceof ActorRef<?> ref) {
+            if (allowedActorRuntime == null || !ref.belongsTo(allowedActorRuntime)) {
+                throw new IllegalArgumentException("ActorRef capabilities may cross only within their owning ActorRuntime");
+            }
+            return ref;
+        }
+
         if (value instanceof List<?> list) {
-            List<Object> frozen = new ArrayList<>(list.size());
-            for (Object item : list) frozen.add(freeze(item));
-            return List.copyOf(frozen);
+            enterComposite(value, path);
+            try {
+                List<Object> frozen = new ArrayList<>(list.size());
+                for (Object item : list) frozen.add(freeze(item, path, budget, depth + 1, allowedActorRuntime));
+                return Collections.unmodifiableList(frozen);
+            } finally {
+                path.remove(value);
+            }
         }
         if (value instanceof Set<?> set) {
-            return set.stream().map(ActorRuntime::freeze).collect(java.util.stream.Collectors.toUnmodifiableSet());
+            enterComposite(value, path);
+            try {
+                Set<Object> frozen = new LinkedHashSet<>();
+                for (Object item : set) {
+                    Object copy = freeze(item, path, budget, depth + 1, allowedActorRuntime);
+                    if (!frozen.add(copy)) {
+                        throw new IllegalArgumentException("actor message set elements collide after freezing");
+                    }
+                }
+                return Collections.unmodifiableSet(frozen);
+            } finally {
+                path.remove(value);
+            }
         }
         if (value instanceof Map<?, ?> map) {
-            Map<Object, Object> frozen = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) frozen.put(freeze(entry.getKey()), freeze(entry.getValue()));
-            return Map.copyOf(frozen);
+            enterComposite(value, path);
+            try {
+                Map<Object, Object> frozen = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    Object key = freeze(entry.getKey(), path, budget, depth + 1, allowedActorRuntime);
+                    Object item = freeze(entry.getValue(), path, budget, depth + 1, allowedActorRuntime);
+                    if (frozen.containsKey(key)) {
+                        throw new IllegalArgumentException("actor message map keys collide after freezing");
+                    }
+                    frozen.put(key, item);
+                }
+                return Collections.unmodifiableMap(frozen);
+            } finally {
+                path.remove(value);
+            }
         }
         if (value.getClass().isArray()) {
-            int length = Array.getLength(value);
-            List<Object> frozen = new ArrayList<>(length);
-            for (int i = 0; i < length; i++) frozen.add(freeze(Array.get(value, i)));
-            return List.copyOf(frozen);
+            enterComposite(value, path);
+            try {
+                int length = Array.getLength(value);
+                List<Object> frozen = new ArrayList<>(length);
+                for (int i = 0; i < length; i++) {
+                    frozen.add(freeze(Array.get(value, i), path, budget, depth + 1, allowedActorRuntime));
+                }
+                return Collections.unmodifiableList(frozen);
+            } finally {
+                path.remove(value);
+            }
         }
-        if (value instanceof Sendable sendable) return sendable.freezeForSend();
+
         throw new IllegalArgumentException("value of type " + value.getClass().getName()
                 + " is not Sendable; mutable host objects cannot cross actor boundaries");
     }
 
-    /** Implemented by generated immutable Oreslang aggregate values. */
-    public interface Sendable {
-        Object freezeForSend();
+    private static void enterComposite(Object value, IdentityHashMap<Object, Boolean> path) {
+        if (path.put(value, Boolean.TRUE) != null) {
+            throw new IllegalArgumentException("cyclic actor message graphs are not Sendable");
+        }
+    }
+
+    private static final class FreezeBudget {
+        private int nodes;
+        private long bytes;
+
+        private void addNode() {
+            if (++nodes > MAX_FREEZE_NODES) {
+                throw new IllegalArgumentException("actor message exceeds maximum graph size " + MAX_FREEZE_NODES);
+            }
+        }
+
+        private void addBytes(long amount) {
+            if (amount < 0 || bytes > MAX_FREEZE_BYTES - amount) {
+                throw new IllegalArgumentException("actor message exceeds maximum frozen size " + MAX_FREEZE_BYTES + " bytes");
+            }
+            bytes += amount;
+        }
     }
 
     @Override
@@ -216,13 +341,14 @@ public final class ActorRuntime implements AutoCloseable {
 
         @SuppressWarnings("unchecked")
         private void run() {
-            final Behavior<M> behavior = behaviorFactory.get();
-            final ActorContext<M> context = new ActorContext<>() {
-                @Override public ActorRef<M> self() { return ref; }
-                @Override public ActorRuntime runtime() { return ActorRuntime.this; }
-                @Override public IsolatePolicy policy() { return policy; }
-            };
             try {
+                final Behavior<M> behavior = java.util.Objects.requireNonNull(
+                        behaviorFactory.get(), "actor behavior factory returned null");
+                final ActorContext<M> context = new ActorContext<>() {
+                    @Override public ActorRef<M> self() { return ref; }
+                    @Override public ActorRuntime runtime() { return ActorRuntime.this; }
+                    @Override public IsolatePolicy policy() { return policy; }
+                };
                 while (true) {
                     Object message = mailbox.take();
                     if (message == STOP) return;
@@ -230,9 +356,12 @@ public final class ActorRuntime implements AutoCloseable {
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
+            } catch (VirtualMachineError fatal) {
+                throw fatal;
             } catch (Throwable failure) {
-                // v0 fail-stop supervision policy. A later supervisor layer will
-                // expose restart/escalation strategies as typed Oreslang APIs.
+                // v0 fail-stop supervision policy. The cell is removed below
+                // so subsequent sends fail immediately instead of targeting a
+                // dead actor left behind in the runtime registry.
             } finally {
                 actors.remove(ref.id(), this);
             }
