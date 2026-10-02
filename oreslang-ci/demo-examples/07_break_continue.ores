@@ -1,0 +1,20 @@
+namespace break_continue_demo;
+
+pub routine main() => void {
+  let total = 0;
+
+  for (let i = 0; i < 8; i = i + 1) {
+    if i == 2; do
+      continue;
+    fi
+
+    if i == 6; do
+      break;
+    fi
+
+    total = total + i;
+  }
+
+  stdio.println(total);
+  return;
+}
