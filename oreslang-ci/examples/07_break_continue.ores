@@ -1,0 +1,35 @@
+namespace break_continue_demo;
+
+pub routine main() => void {
+  let classicTotal = 0;
+
+  for (let i = 0; i < 8; i = i + 1) {
+    if i == 2; do
+      continue;
+    fi
+
+    if i == 6; do
+      break;
+    fi
+
+    classicTotal = classicTotal + i;
+  }
+
+  let forOfTotal = 0;
+
+  for (val item of arr[10, 20, 30, 40, 50]) {
+    if item == 20; do
+      continue;
+    fi
+
+    if item == 40; do
+      break;
+    fi
+
+    forOfTotal = forOfTotal + item;
+  }
+
+  stdio.println(classicTotal);
+  stdio.println(forOfTotal);
+  return;
+}

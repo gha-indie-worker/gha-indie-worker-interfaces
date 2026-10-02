@@ -1,0 +1,28 @@
+namespace defer_producers_demo;
+
+fnc make_cleanup(String label) => typeof fnc() -> void {
+  stdio.stdout.write("prepare-");
+  stdio.stdout.write(label);
+  stdio.stdout.write(";");
+
+  return || -> {
+    stdio.stdout.write("cleanup-");
+    stdio.stdout.write(label);
+    stdio.stdout.write(";");
+  };
+}
+
+pub routine main() => void {
+  defer make_cleanup("fnc");
+
+  defer (|| -> {
+    stdio.stdout.write("prepare-lambda;");
+
+    return || -> {
+      stdio.stdout.write("cleanup-lambda;");
+    };
+  })();
+
+  stdio.stdout.write("body;");
+  return;
+}
