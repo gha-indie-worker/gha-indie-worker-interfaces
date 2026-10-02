@@ -1,0 +1,29 @@
+name: oreslang-pr16-external-ci
+
+on:
+  push:
+    branches:
+      - ci/oreslang-pr16
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+
+      - name: Verify Oreslang mirror
+        working-directory: oreslang-ci
+        run: mvn -B -ntp verify
