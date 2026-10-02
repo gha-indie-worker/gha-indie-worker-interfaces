@@ -748,9 +748,12 @@ public final class TypeChecker {
             }
             Ast.Param messageParam = behavior.parameters().getFirst();
             Type messageType = resolveParam(messageParam, generics, self);
+            Named actorType = new Named("Actor", List.of(messageType));
             Function expectedBehavior = new Function(List.of(messageType), Primitive.VOID);
-            validateLambdaAgainstExpected(behavior, expectedBehavior, env, generics, self);
-            return new Named("Actor", List.of(messageType));
+            Env actorEnv = new Env(env);
+            actorEnv.define("self", actorType, Ast.BindingKind.VAL);
+            validateLambdaAgainstExpected(behavior, expectedBehavior, actorEnv, generics, self);
+            return actorType;
         }
         if (expr instanceof Ast.LambdaExpr lambda) {
             Env lambdaEnv = new Env(env);
