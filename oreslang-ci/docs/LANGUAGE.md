@@ -72,6 +72,26 @@ fnc answer() {
 
 `@Ret<T>` and `=> T` are equivalent. If both are present they must agree. A function returns exactly one value; multiple logical values are represented by a tuple, array, object, class value, or another aggregate.
 
+Return types may be unions, homogeneous arrays, finite tuple types, or structural record types:
+
+```ores
+type intOrBoolOrString = bool | int | string;
+
+fnc mixed() => Array<type intOrBoolOrString> {
+  return [3, true, "yes"];
+}
+
+fnc fixed() => [int, bool, string] {
+  return [3, true, "yes"];
+}
+
+fnc named() => {foo: int, bar: string} {
+  return obj{foo: 5, bar: "x"};
+}
+```
+
+The `type` marker inside `Array<type intOrBoolOrString>` is accepted as an explicit alias marker; `Array<intOrBoolOrString>` is equivalent. A finite tuple type records exact arity and the type of each position even though the interpreter represents the value with a JVM `List`. A record type names required members; extra members remain compatible with the structural type system.
+
 ## Bindings
 
 Every local binding is declared as exactly one of:
@@ -87,11 +107,29 @@ let retries = 0;
 retries = retries + 1;
 ```
 
-Destructuring carries mutability per element:
+Destructuring carries mutability per element. A binding kind propagates through later unqualified names until another explicit binding kind appears. A binding kind may also prefix the whole pattern.
 
 ```ores
-[const code, let body] = (200, "ok");
+[const number, flag, answer] = fixed();   // all const
+const [x, y, z] = fixed();               // all const
+[const head, let middle, tail] = fixed(); // head const; middle/tail let
+
+const {foo, bar} = named();
+// Equivalent per-item spelling, shown in a separate scope:
+// {const foo, const bar} = named();
 ```
+
+A bare `_` is a sequence discard pattern: it consumes that array/tuple position without declaring a variable, so it can be repeated in the same sequence pattern or reused by later destructures. Object patterns do not accept bare `_` because object destructuring is key-based rather than positional.
+
+```ores
+[const code, _, let body] = (200, "ignored", "ok");
+[const next, _, let tail] = (201, "ignored again", "done");
+[_, _, const final] = (1, 2, 3);
+```
+
+`_` is not readable after the destructure because no lexical binding is created for it. A destructured `const` is an immutable runtime binding; unlike a standalone `const x = ...` declaration, the aggregate being destructured does not need to be a compile-time constant.
+
+Sequence destructuring requires a returned tuple or array/list. Finite tuples are checked for exact arity and per-position type. Object destructuring requires a record/map-like value and every requested key must exist. If the returned type is a union, destructuring is allowed only when every union alternative supports the requested pattern; each extracted binding receives the union of the corresponding alternative member types. Function-parameter destructuring is intentionally not part of this syntax yet.
 
 ## Classes, receivers, multiple inheritance, and interfaces
 
@@ -157,11 +195,17 @@ val first = values[0];
 
 `arr[...]` is the canonical inline-array spelling. The original bare `[...]` literal remains accepted for source compatibility and destructuring migration.
 
-Tuples preserve per-position static types:
+Tuples preserve per-position static types. Parenthesized tuple literals and list-backed values returned against a finite tuple type both retain the declared positional types:
 
 ```ores
 val pair = (1, "one");
 [const number, let label] = pair;
+
+fnc result() => [int, bool, string] {
+  return [3, true, "yes"];
+}
+
+const [num, ok, answer] = result();
 ```
 
 ## Structural typing and interfaces
@@ -208,11 +252,42 @@ const complex z = 3 + 4i;
 
 Numeric widening is loss-aware; real values can widen toward complex values, but silent lossy narrowing is not performed.
 
+## Generics and operators
+
+Generic declarations and type applications use angle brackets:
+
+```ores
+define class Box<T>
+  val T value;
+end
+
+fnc identity<T>(T value) => T {
+  return value;
+}
+
+fnc use(Box<int> box) => int {
+  return identity(box.value);
+}
+```
+
+Known classes, interfaces, aliases, and built-ins enforce generic arity. Generic parameters are opaque types, not an implicit `any`: a concrete value is not assignable to an unconstrained `T` unless inference has bound that `T`. Generic function and method calls infer type arguments from value arguments. Calls may also state type arguments explicitly with `identity<int>(42)`; `identity<>(42)` explicitly requests inference. Constructors support the same inference marker: `new Box<>(7)` infers `Box<int>` from positional fields, including inherited generic fields. Every class generic must be inferable and repeated occurrences must infer compatibly; otherwise explicit type arguments are required. The `<` opening a call-site generic list must be adjacent to the callable name/member, which keeps ordinary spaced comparisons such as `a < b` unambiguous. Nested generic closers such as `Option<Array<int>>` remain valid.
+
+Generic inference works for both unqualified and module-qualified calls, such as `identity<>(42)` and `util.identity<>(42)`. Generic declarations must currently be specialized by a direct call. Unspecialized polymorphic function or bound-method values such as `val f = identity` or `val f = box.map` are rejected until Oreslang has a first-class universal/polytype representation; non-generic function values remain supported.
+
+Generic bindings are substituted through inherited class fields/methods, constructors, inherited interfaces, structural-typing views, and nominal subtype checks, so `Child<U> extends Parent<U>` preserves the concrete `U` all the way through member access and assignment. Generic class and interface arguments are invariant by default: `Child<int>` may satisfy `Parent<int>`, but never `Parent<String>`; likewise an implementation of `HasValue<int>` does not satisfy `HasValue<String>`.
+
+Generic callable contracts compare type parameters by position rather than spelling, so an interface method `map<T>` can be implemented as `map<U>` when their signatures are otherwise equivalent. The number of callable generic parameters is part of the contract; adding an unused extra generic parameter does not silently satisfy the interface.
+
+`Type<>` is reserved for inferred type arguments in type contexts that explicitly support inference; it is **not** an expression operator. Oreslang uses `^^` for logical XOR and `^` for bitwise XOR.
+
+Logical operators are `!`, `&&`, `^^`, and `||`. `&&` and `||` short-circuit; `^^` evaluates both boolean operands. Bitwise operators are integer-only: unary `~`, binary `&`, `^`, `|`, and shifts `<<`, `>>`, `>>>`. In the current runtime all integral spellings share one signed 64-bit bitwise lane: `~` flips all 64 bits, `<<` shifts left, `>>` is arithmetic/sign-extending right shift, and `>>>` is logical/zero-filling right shift. Shift distances must be in the range 0 through 63. Width-specific masking/sign behavior can be introduced later when the runtime preserves distinct i8/i16/i32/i64/u* representations instead of collapsing them to the current integral type.
+
+From tighter to looser binding, the relevant binary precedence is: multiplicative, additive, shifts, comparisons, equality, bitwise AND, bitwise XOR, bitwise OR, logical AND, logical XOR, logical OR, ternary, assignment. Prefix borrow `&value` / `&mut value` remains unambiguous because bitwise `&` is infix.
+
 ## Lambdas
 
-Lambdas are lexical closures by default and use `->`. The explicit `lex`
-and `lex` prefixes are aliases for that default when capture intent should
-be visible in source. The canonical block form keeps returns explicit:
+Lambdas are lexical closures by default and use `->`. The canonical block
+form keeps returns explicit:
 
 ```ores
 val Fnc<int, int> inc = |int x| -> {
@@ -222,23 +297,6 @@ val Fnc<int, int> inc = |int x| -> {
 
 A normal lambda may capture activation-local bindings from its enclosing
 function or block. Captured mutable state remains part of the closure.
-
-```ores
-val short = lex || -> {
-  return local_value;
-};
-
-val long = lexical || -> {
-  return local_value;
-};
-```
-
-The compiler computes a free-variable capture plan for each lexical lambda.
-Only referenced activation-local bindings are retained. Unreferenced locals
-(including secrets) are not copied into or retained by the closure environment.
-Immutable captures are detached from the outer frame; mutable captures share
-only the required mutable slot. A lexical lambda whose capture plan is empty
-uses the same no-environment fast path as an `nlex` lambda.
 
 ## Non-lexical callables (`nlex`)
 
@@ -258,11 +316,11 @@ pub routine main() => void {
   val int outer_bias = 100;
 
   val Fnc<int, int> lexical = |int x| -> {
-    return x + outer_bias;          // allowed: normal lexical capture
+    return x + outer_bias;
   };
 
   val Fnc<int, int> isolated = nlex |int x| -> {
-    val int outer_bias = 1;         // local shadows the outer name
+    val int outer_bias = 1;
     return math.offset(x) + outer_bias;
   };
 }
@@ -276,35 +334,17 @@ Inside an `nlex` region:
   such as `stdio`, `process`, and `print` remain available;
 - an enclosing activation-local binding is not available for capture;
 - lambdas created inside an `nlex fnc`, `nlex routine`, or `nlex` lambda
-  inherit the capture barrier recursively;
-- `lex` may not reopen an inherited `nlex` region. The barrier is
-  one-way so an inner helper cannot accidentally regain access to private outer
-  activation data.
+  inherit the capture barrier recursively.
 
-For named top-level/module `fnc` and `routine` declarations, `lex` explicitly document the normal lexical policy, while `nlex` is
-mainly a compile-time guarantee about any closures created in their bodies.
-Named callables already begin with their own invocation frame. The
-runtime benefit is at lambda creation. Ordinary lambdas retain only the
-specific lexical slots in their compiler-produced capture plan; an `nlex`
-lambda takes the no-environment path. Capture-free lexical lambdas are lowered
-to that same no-environment representation. An immediately invoked lambda is
-lowered as a direct invocation and does not allocate a first-class closure
-environment at all; if that invocation creates a nested escaping closure, the
-nested closure still performs the normal selective capture analysis.
+For named top-level/module `fnc` and `routine` declarations, `nlex` is
+mainly a compile-time guarantee about closures created in their bodies: those
+named callables already begin with their own invocation frame. The runtime
+benefit is at lambda creation. Ordinary lambdas snapshot/retain the lexical
+environment they need; an `nlex` lambda takes the no-environment path.
 
-Nested lexical lambdas are analyzed transitively. If an inner lambda needs a
-grandparent local, the enclosing closure retains that specific local so the
-inner lambda can be created safely later. An inner `nlex` lambda stops that
-transitive retention. This is both an optimization and a privacy boundary:
-creating a helper closure does not implicitly preserve unrelated locals from
-its enclosing activation.
-
-This distinction also resolves the import question. JavaScript/TypeScript
-imports are presented as lexical module bindings, while Java imports/static
-members are modeled differently, but neither requires retaining a particular
-function invocation. Oreslang classifies capture eligibility by **storage
-lifetime**, not merely source nesting: module/import/global bindings are
-code-unit bindings, while outer locals belong to an activation frame.
+Capture eligibility follows **storage lifetime**, not merely source nesting:
+module/import/global bindings have code-unit lifetime, while outer locals
+belong to an activation frame.
 
 ## Conditionals
 
@@ -708,7 +748,8 @@ A static class function:
 - has no implicit or explicit `self`;
 - cannot be invoked through an instance;
 - may be extracted as a function value from the class namespace;
-- has one shared definition, just like any other named function.
+- has one shared definition, just like any other named function;
+- does not capture enclosing class generics. In `class Box<T>`, a static function cannot use that `T`; declare its own `static fnc identity<U>(U value) => U` instead. Static-function generics support the same explicit and inferred call syntax as top-level functions.
 
 Static data fields are intentionally not part of v0.5 yet; `static` on a class binding is rejected rather than silently acquiring Java-like global mutable state semantics.
 

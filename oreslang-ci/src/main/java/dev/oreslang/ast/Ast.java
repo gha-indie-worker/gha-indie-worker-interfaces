@@ -63,6 +63,53 @@ public final class Ast {
         public static TypeRef stringLiteral(String value) { return new TypeRef("$string$" + value, List.of(), false); }
         public boolean isStringLiteral() { return name.startsWith("$string$"); }
         public String stringLiteralValue() { return name.substring("$string$".length()); }
+
+        public static TypeRef union(List<TypeRef> options) {
+            java.util.ArrayList<TypeRef> flattened = new java.util.ArrayList<>();
+            for (TypeRef option : options) {
+                if (option.isUnion()) {
+                    for (TypeRef nested : option.arguments()) if (!flattened.contains(nested)) flattened.add(nested);
+                } else if (!flattened.contains(option)) flattened.add(option);
+            }
+            if (flattened.isEmpty()) throw new IllegalArgumentException("union type requires at least one member");
+            if (flattened.size() == 1) return flattened.getFirst();
+            flattened.sort(java.util.Comparator.comparing(TypeRef::toString));
+            return new TypeRef("$union$", List.copyOf(flattened), false);
+        }
+        public boolean isUnion() { return name.equals("$union$"); }
+
+        public static TypeRef tupleType(List<TypeRef> elements) {
+            return new TypeRef("$tuple$", List.copyOf(elements), false);
+        }
+        public boolean isTupleType() { return name.equals("$tuple$"); }
+
+        public static TypeRef recordType(java.util.Map<String, TypeRef> members) {
+            java.util.ArrayList<TypeRef> fields = new java.util.ArrayList<>(members.size());
+            java.util.ArrayList<java.util.Map.Entry<String, TypeRef>> entries = new java.util.ArrayList<>(members.entrySet());
+            entries.sort(java.util.Map.Entry.comparingByKey());
+            for (java.util.Map.Entry<String, TypeRef> entry : entries) {
+                if (entry.getKey() == null || entry.getKey().isBlank()) {
+                    throw new IllegalArgumentException("record type field name cannot be blank");
+                }
+                fields.add(new TypeRef("$field$" + entry.getKey(), List.of(entry.getValue()), false));
+            }
+            return new TypeRef("$record$", List.copyOf(fields), false);
+        }
+        public boolean isRecordType() { return name.equals("$record$"); }
+        public java.util.Map<String, TypeRef> recordMembers() {
+            if (!isRecordType()) throw new IllegalStateException("not a record type");
+            java.util.LinkedHashMap<String, TypeRef> members = new java.util.LinkedHashMap<>();
+            for (TypeRef field : arguments) {
+                if (!field.name().startsWith("$field$") || field.arguments().size() != 1 || field.inferArguments()) {
+                    throw new IllegalStateException("malformed record type field");
+                }
+                String fieldName = field.name().substring("$field$".length());
+                if (members.putIfAbsent(fieldName, field.arguments().getFirst()) != null) {
+                    throw new IllegalStateException("duplicate record type field " + fieldName);
+                }
+            }
+            return java.util.Collections.unmodifiableMap(members);
+        }
     }
 
     public record Param(TypeRef type, String name, boolean structural, boolean mutable) {
@@ -76,34 +123,25 @@ public final class Ast {
             Visibility visibility,
             boolean async,
             boolean nonLexical,
-            boolean explicitLexical,
             List<String> genericParameters,
             List<Param> parameters,
             TypeRef returnType,
             List<Annotation> annotations,
             List<Stmt> body) implements Decl {
         public FunctionDecl {
-            if (nonLexical && explicitLexical) {
-                throw new IllegalArgumentException("callable cannot be both lexical and nlex");
-            }
             genericParameters = List.copyOf(genericParameters);
             parameters = List.copyOf(parameters);
             annotations = List.copyOf(annotations);
             body = List.copyOf(body);
         }
         public FunctionDecl(String name, CallableKind kind, Visibility visibility, boolean async,
-                            boolean nonLexical, List<String> genericParameters, List<Param> parameters,
-                            TypeRef returnType, List<Annotation> annotations, List<Stmt> body) {
-            this(name, kind, visibility, async, nonLexical, false, genericParameters, parameters, returnType, annotations, body);
-        }
-        public FunctionDecl(String name, CallableKind kind, Visibility visibility, boolean async,
                             List<String> genericParameters, List<Param> parameters, TypeRef returnType,
                             List<Annotation> annotations, List<Stmt> body) {
-            this(name, kind, visibility, async, false, false, genericParameters, parameters, returnType, annotations, body);
+            this(name, kind, visibility, async, false, genericParameters, parameters, returnType, annotations, body);
         }
         public FunctionDecl(String name, Visibility visibility, boolean async, List<String> genericParameters,
                             List<Param> parameters, TypeRef returnType, List<Annotation> annotations, List<Stmt> body) {
-            this(name, CallableKind.FNC, visibility, async, false, false, genericParameters, parameters, returnType, annotations, body);
+            this(name, CallableKind.FNC, visibility, async, false, genericParameters, parameters, returnType, annotations, body);
         }
     }
 
@@ -197,10 +235,29 @@ public final class Ast {
             IfStmt, TryStmt, ForOfStmt, ForStmt { }
 
     public record BindingStmt(BindingKind kind, TypeRef declaredType, String name, Expr initializer) implements Stmt { }
-    public record DestructureBinding(BindingKind kind, String name) { }
+    public record DestructureBinding(BindingKind kind, String name) {
+        public DestructureBinding {
+            if (name == null || name.isBlank()) {
+                throw new IllegalArgumentException("destructure binding name cannot be blank");
+            }
+        }
 
-    public record DestructureStmt(List<DestructureBinding> bindings, Expr initializer) implements Stmt {
+        public static DestructureBinding discard() {
+            return new DestructureBinding(BindingKind.VAL, "_");
+        }
+
+        public boolean isDiscard() {
+            return "_".equals(name);
+        }
+    }
+
+    public enum DestructureKind { SEQUENCE, OBJECT }
+
+    public record DestructureStmt(DestructureKind kind, List<DestructureBinding> bindings, Expr initializer) implements Stmt {
         public DestructureStmt { bindings = List.copyOf(bindings); }
+        public DestructureStmt(List<DestructureBinding> bindings, Expr initializer) {
+            this(DestructureKind.SEQUENCE, bindings, initializer);
+        }
     }
 
     public record ReturnStmt(Expr value) implements Stmt { }
@@ -245,8 +302,24 @@ public final class Ast {
     public record AssignExpr(Expr target, Expr value) implements Expr { }
     public record ConditionalExpr(Expr condition, Expr whenTrue, Expr whenFalse) implements Expr { }
 
-    public record CallExpr(Expr callee, List<Expr> arguments) implements Expr {
-        public CallExpr { arguments = List.copyOf(arguments); }
+    public record CallExpr(
+            Expr callee,
+            List<TypeRef> typeArguments,
+            boolean typeArgumentsPresent,
+            List<Expr> arguments) implements Expr {
+        public CallExpr {
+            typeArguments = List.copyOf(typeArguments);
+            arguments = List.copyOf(arguments);
+            if (!typeArgumentsPresent && !typeArguments.isEmpty()) {
+                throw new IllegalArgumentException("call type arguments require an explicit <...> marker");
+            }
+        }
+        public CallExpr(Expr callee, List<Expr> arguments) {
+            this(callee, List.of(), false, arguments);
+        }
+        public CallExpr(Expr callee, List<TypeRef> typeArguments, List<Expr> arguments) {
+            this(callee, typeArguments, true, arguments);
+        }
     }
 
     public record MemberExpr(Expr receiver, String member) implements Expr { }
@@ -272,24 +345,13 @@ public final class Ast {
         public ObjectExpr { fields = List.copyOf(fields); }
     }
 
-    public record LambdaExpr(
-            List<Param> parameters,
-            Expr expressionBody,
-            List<Stmt> blockBody,
-            boolean nonLexical,
-            boolean explicitLexical) implements Expr {
+    public record LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody, boolean nonLexical) implements Expr {
         public LambdaExpr {
-            if (nonLexical && explicitLexical) {
-                throw new IllegalArgumentException("lambda cannot be both lexical and nlex");
-            }
             parameters = List.copyOf(parameters);
             blockBody = blockBody == null ? null : List.copyOf(blockBody);
         }
-        public LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody, boolean nonLexical) {
-            this(parameters, expressionBody, blockBody, nonLexical, false);
-        }
         public LambdaExpr(List<Param> parameters, Expr expressionBody, List<Stmt> blockBody) {
-            this(parameters, expressionBody, blockBody, false, false);
+            this(parameters, expressionBody, blockBody, false);
         }
     }
 }
