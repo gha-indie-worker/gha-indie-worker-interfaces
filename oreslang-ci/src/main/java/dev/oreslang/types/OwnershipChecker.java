@@ -347,6 +347,9 @@ public final class OwnershipChecker {
             Ast.FunctionDecl fn = findFunction(name.name());
             if (fn != null) {
                 checkArguments(call.arguments(), fn.parameters(), scope, "function " + fn.name());
+                if (isActorCallable(fn)) {
+                    return new ValueInfo(Ast.TypeRef.simple("ActorTask"), ValueKind.COPY, null);
+                }
                 return new ValueInfo(fn.returnType(), kindOfType(fn.returnType()), null);
             }
         }
@@ -706,6 +709,11 @@ public final class OwnershipChecker {
         return null;
     }
 
+    private boolean isActorCallable(Ast.FunctionDecl fn) {
+        return fn.annotations().stream().anyMatch(annotation ->
+                annotation.name().equals("__Actor") || annotation.name().equals("__ActorIsolate"));
+    }
+
     private Ast.FunctionDecl findFunction(String name) {
         if (ambiguousFunctions.contains(name)) return null;
         return functions.get(name);
@@ -794,7 +802,7 @@ public final class OwnershipChecker {
         return switch (type.name()) {
             case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
                     "f32","f64","float","decimal","complex64","complex128","complex",
-                    "bool","Bool","string","String","void","Actor" -> true;
+                    "bool","Bool","string","String","void","Actor","ActorTask" -> true;
             default -> false;
         };
     }
