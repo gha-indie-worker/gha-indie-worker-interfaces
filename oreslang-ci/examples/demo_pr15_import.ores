@@ -3,9 +3,8 @@ import module arithmetic from "./demo_pr15_sibling_math.ores";
 
 pub routine main() => void {
   val total = arithmetic.add(20, 22);
-  const [left, right] = arithmetic.pair(total);
+  val pair = arithmetic.pair(total);
   stdio.println(total);
-  stdio.println(left);
-  stdio.println(right);
+  stdio.println(pair);
   return;
 }
