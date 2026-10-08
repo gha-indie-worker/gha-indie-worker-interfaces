@@ -1,0 +1,8 @@
+{application, benchmark_otp, [
+    {description, "Erlang/OTP + Cowboy HTTP benchmark"},
+    {vsn, "0.1.0"},
+    {modules, [benchmark_otp, benchmark_otp_handler]},
+    {registered, []},
+    {applications, [kernel, stdlib, cowboy]},
+    {env, []}
+]}.

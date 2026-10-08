@@ -1,0 +1,49 @@
+// Spin HTTP comparison target (shared actor per request).
+// This source is staged into oreslang-spin/examples/ by run.sh so imports are pinned.
+import module spin from "../src/spin";
+import module http_routing from "../dependencies/http-routing/src/http_routing";
+
+define actor BenchmarkHandler as
+  receive(ActorMail<String> mail): void {
+    val request = http.claim(mail.value);
+    if request.operation_id == "health"; then
+      await request.respond(200, "application/json", "{\"status\":\"ok\"}");
+    elif request.operation_id == "plaintext"; then
+      await request.respond(200, "text/plain; charset=utf-8", "hello, world!");
+    elif request.operation_id == "json"; then
+      await request.respond(200, "application/json", "{\"message\":\"hello, world!\"}");
+    elif request.operation_id == "echo"; then
+      await request.start(200, "application/octet-stream");
+      loop {
+        val Array<int> chunk = await request.read_chunk(16384);
+        if chunk.size == 0; then break; fi
+        await request.write_bytes(chunk);
+      }
+      await request.finish();
+    else
+      await request.respond(500, "text/plain; charset=utf-8", "Unexpected operation");
+    fi
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val builder = spin.builder();
+  val health = http_routing.path("/health", arr[http_routing.literal("health")]);
+  val plaintext = http_routing.path("/plaintext", arr[http_routing.literal("plaintext")]);
+  val json = http_routing.path("/json", arr[http_routing.literal("json")]);
+  val echo = http_routing.path("/echo", arr[http_routing.literal("echo")]);
+  builder.route("GET", rt borrow health, http.handler("BenchmarkHandler"), 0, 0, "health").unwrap();
+  builder.route("GET", rt borrow plaintext, http.handler("BenchmarkHandler"), 0, 0, "plaintext").unwrap();
+  builder.route("GET", rt borrow json, http.handler("BenchmarkHandler"), 0, 0, "json").unwrap();
+  builder.route("POST", rt borrow echo, http.handler("BenchmarkHandler"), 0, 0, "echo").unwrap();
+  val app = builder.build().unwrap();
+  val server = http.listen("127.0.0.1", 8080, 128, 1048576, 30000);
+  stdio.println(server.port);
+  loop {
+    val request = await server.accept();
+    app.dispatch(request);
+  }
+  return;
+}

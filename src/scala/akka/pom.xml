@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+ <modelVersion>4.0.0</modelVersion>
+ <groupId>dev.oreslang.bench</groupId><artifactId>akka-http-bench</artifactId><version>0.1.0</version>
+ <properties>
+  <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  <scala.version>2.13.17</scala.version>
+  <maven.compiler.release>17</maven.compiler.release>
+ </properties>
+ <dependencies>
+  <dependency><groupId>org.scala-lang</groupId><artifactId>scala-library</artifactId><version>${scala.version}</version></dependency>
+  <!-- Last Apache-2-licensed Akka line, resolved from Maven Central without repository tokens. -->
+  <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-http_2.13</artifactId><version>10.2.10</version></dependency>
+  <dependency><groupId>com.typesafe.akka</groupId><artifactId>akka-stream_2.13</artifactId><version>2.6.20</version></dependency>
+ </dependencies>
+ <build>
+  <sourceDirectory>src/main/scala</sourceDirectory>
+  <plugins>
+   <plugin>
+    <groupId>net.alchim31.maven</groupId><artifactId>scala-maven-plugin</artifactId><version>4.9.2</version>
+    <executions><execution><id>compile-scala</id><goals><goal>compile</goal><goal>testCompile</goal></goals></execution></executions>
+    <configuration><scalaVersion>${scala.version}</scalaVersion><args><arg>-deprecation</arg><arg>-feature</arg></args></configuration>
+   </plugin>
+   <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.0</version></plugin>
+   <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId><version>3.8.1</version></plugin>
+  </plugins>
+ </build>
+</project>

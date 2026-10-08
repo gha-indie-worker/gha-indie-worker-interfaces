@@ -1,0 +1,16 @@
+{
+  "name": "oreslang-bench-http-contract",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "tsp compile .",
+    "check": "tsp compile . --warn-as-error"
+  },
+  "devDependencies": {
+    "@typespec/compiler": "1.16.0",
+    "@typespec/http": "1.16.0",
+    "@typespec/openapi3": "1.16.0",
+    "@typespec/openapi": "1.16.0"
+  }
+}

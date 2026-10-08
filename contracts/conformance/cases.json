@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "description": "Machine-readable runtime scenarios; HTTP contract is defined in main.tsp and its compiled OpenAPI artifact.",
+  "scenarios": [
+    {
+      "id": "health",
+      "method": "GET",
+      "path": "/health",
+      "inOpenApi": true,
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "kind": "json",
+          "equals": {
+            "status": "ok"
+          }
+        }
+      }
+    },
+    {
+      "id": "plaintext",
+      "method": "GET",
+      "path": "/plaintext",
+      "inOpenApi": true,
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/plain; charset=utf-8"
+        },
+        "body": {
+          "kind": "utf8",
+          "equals": "hello, world!"
+        }
+      }
+    },
+    {
+      "id": "json",
+      "method": "GET",
+      "path": "/json",
+      "inOpenApi": true,
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "kind": "json",
+          "equals": {
+            "message": "hello, world!"
+          }
+        }
+      }
+    },
+    {
+      "id": "echo-empty",
+      "method": "POST",
+      "path": "/echo",
+      "inOpenApi": true,
+      "payload": {
+        "kind": "binary-pattern",
+        "byteRange": 256,
+        "repeat": 0
+      },
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/octet-stream"
+        },
+        "body": {
+          "kind": "echo"
+        }
+      }
+    },
+    {
+      "id": "echo-binary",
+      "method": "POST",
+      "path": "/echo",
+      "inOpenApi": true,
+      "payload": {
+        "kind": "binary-pattern",
+        "byteRange": 256,
+        "repeat": 4
+      },
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/octet-stream"
+        },
+        "body": {
+          "kind": "echo"
+        }
+      }
+    },
+    {
+      "id": "echo-64k",
+      "method": "POST",
+      "path": "/echo",
+      "inOpenApi": true,
+      "payload": {
+        "kind": "binary-pattern",
+        "byteRange": 256,
+        "repeat": 256
+      },
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/octet-stream"
+        },
+        "body": {
+          "kind": "echo"
+        }
+      }
+    },
+    {
+      "id": "echo-1m",
+      "method": "POST",
+      "path": "/echo",
+      "inOpenApi": true,
+      "payload": {
+        "kind": "binary-pattern",
+        "byteRange": 256,
+        "repeat": 4096
+      },
+      "expected": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/octet-stream"
+        },
+        "body": {
+          "kind": "echo"
+        }
+      }
+    },
+    {
+      "id": "not-found",
+      "method": "GET",
+      "path": "/not-found",
+      "inOpenApi": false,
+      "expected": {
+        "status": 404,
+        "headers": {},
+        "body": {
+          "kind": "ignore"
+        }
+      }
+    }
+  ]
+}

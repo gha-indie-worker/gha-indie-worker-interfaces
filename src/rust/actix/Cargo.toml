@@ -1,0 +1,12 @@
+[package]
+name = "oreslang-benchmark-actix"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+actix-web = "=4.15.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

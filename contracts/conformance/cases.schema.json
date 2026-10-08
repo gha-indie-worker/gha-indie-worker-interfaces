@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ores-truffle-oreslang/oreslang-restful-server-perf-benchmarks/contracts/conformance/cases.schema.json",
+  "title": "HTTP benchmark conformance scenarios",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "scenarios"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "required": [
+        "kind",
+        "byteRange",
+        "repeat"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "binary-pattern"
+        },
+        "byteRange": {
+          "const": 256
+        },
+        "repeat": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4097
+        }
+      }
+    },
+    "body": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "equals"
+          ],
+          "properties": {
+            "kind": {
+              "const": "utf8"
+            },
+            "equals": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "equals"
+          ],
+          "properties": {
+            "kind": {
+              "const": "json"
+            },
+            "equals": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "echo"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ignore"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "expected": {
+      "type": "object",
+      "required": [
+        "status",
+        "headers",
+        "body"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "headers": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "$ref": "#/$defs/body"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "method",
+        "path",
+        "inOpenApi",
+        "expected"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]+$"
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/[a-z0-9/-]+$"
+        },
+        "inOpenApi": {
+          "type": "boolean"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        }
+      }
+    }
+  }
+}
