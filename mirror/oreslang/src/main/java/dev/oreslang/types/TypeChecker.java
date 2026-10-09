@@ -891,6 +891,21 @@ public final class TypeChecker {
         effectiveCallableTargets(klass, new LinkedHashSet<>());
 
         for (Ast.FieldDecl field : klass.fields()) {
+            if (klass.actorKind() != Ast.ActorKind.NONE && field.name().equals("concurrency")) {
+                if (field.bindingKind() != Ast.BindingKind.VAL
+                        || field.visibility() != Ast.Visibility.PRIVATE
+                        || field.type() == null
+                        || !field.type().name().equals("int")
+                        || !(field.initializer() instanceof Ast.LiteralExpr literal)
+                        || !(literal.value() instanceof Number number)
+                        || number.longValue() < 1
+                        || number.longValue() > (klass.actorKind() == Ast.ActorKind.UNTRUSTED ? 32 : 1024)
+                        || number.doubleValue() != number.longValue()) {
+                    throw new IllegalArgumentException(
+                            "actor concurrency must be an immutable literal int, "
+                                    + "1..32 for untrusted actors or 1..1024 otherwise");
+                }
+            }
             if (klass.actorKind() != Ast.ActorKind.NONE && field.visibility() == Ast.Visibility.PUBLIC) {
                 throw new IllegalArgumentException("actor state field '" + klass.name() + "." + field.name()
                         + "' cannot be public; expose state through mailbox-dispatched methods");
@@ -1949,6 +1964,30 @@ public final class TypeChecker {
             };
         }
         if (expr instanceof Ast.CallExpr call) {
+            if (call.callee() instanceof Ast.MemberExpr method
+                    && Set.of("send", "done").contains(method.member())) {
+                Type receiver = deref(typeOf(method.receiver(), env, generics, self));
+                if (receiver instanceof Named mail && mail.name().equals("ActorMail")
+                        && mail.arguments().size() == 1) {
+                    if (call.typeArgumentsPresent()) {
+                        throw new IllegalArgumentException("ActorMail operations have no type arguments");
+                    }
+                    if (method.member().equals("done")) {
+                        if (!call.arguments().isEmpty()) {
+                            throw new IllegalArgumentException("m.done() takes no arguments");
+                        }
+                    } else if (call.arguments().size() > 1) {
+                        throw new IllegalArgumentException("m.send() takes zero or one value");
+                    } else if (call.arguments().size() == 1) {
+                        // Output values may differ from the input type, but
+                        // must not be unchecked host/actor capabilities.
+                        Type output = typeOf(call.arguments().getFirst(), env, generics, self);
+                        validateActorCallableBoundaryType(output,
+                                currentActorKind, false, "m.send output");
+                    }
+                    return Primitive.VOID;
+                }
+            }
             if (isBuiltinStdoutCall(call, "log", env)) {
                 if (call.typeArgumentsPresent()) {
                     throw new IllegalArgumentException("stdio.stdout.log does not accept call-site type arguments");
@@ -2835,6 +2874,7 @@ public final class TypeChecker {
                 return switch (member.member()) {
                     case "actor_id" -> new Named("ActorId", List.of());
                     case "sequence" -> Primitive.INT;
+                    case "message_sequence" -> new Named("Option", List.of(Primitive.INT));
                     case "value" -> output.arguments().getFirst();
                     default -> throw new IllegalArgumentException(
                             "unknown ActorOutput member '" + member.member() + "'");
@@ -2846,6 +2886,9 @@ public final class TypeChecker {
                     throw new IllegalArgumentException("ActorMail<T> requires exactly one payload type");
                 }
                 return switch (member.member()) {
+                    case "message_id" -> Primitive.STRING;
+                    case "done", "send" -> throw new IllegalArgumentException(
+                            "ActorMail." + member.member() + " is direct-call-only");
                     case "value" -> mail.arguments().getFirst();
                     case "recipient" -> new Named("ActorId", List.of());
                     case "sender" -> new Named(

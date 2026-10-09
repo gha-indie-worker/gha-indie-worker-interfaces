@@ -684,6 +684,24 @@ public final class Parser {
                         "declarations cannot be nested inside actors; declare nested types at file or module scope");
             }
 
+            // Actor mailbox admission policy: metadata, not writable state.
+            // "int concurrency: 5;" is equivalent to "val int concurrency = 5;".
+            if (check(IDENT) && peek().lexeme().equals("int")
+                    && checkNextLexeme("concurrency")) {
+                validateActorFieldModifiers(mods);
+                if (!annotations.isEmpty()) throw error(peek(),
+                        "actor concurrency does not accept annotations");
+                advance();
+                advance();
+                consume(COLON, "expected ':' after actor concurrency");
+                Ast.Expr limit = parseExpression();
+                consumeExpressionClassFieldTerminator(limit,
+                        "actor concurrency declaration must end with ';'");
+                fields.add(new Ast.FieldDecl("concurrency", Ast.Visibility.PRIVATE,
+                        Ast.BindingKind.VAL, Ast.TypeRef.simple("int"),
+                        List.of(), limit, false));
+                continue;
+            }
             if (isBindingKind(peek().type())) {
                 validateActorFieldModifiers(mods);
                 fields.add(parseField(annotations, mods.visibility));

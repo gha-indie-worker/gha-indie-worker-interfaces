@@ -447,6 +447,22 @@ public final class OresEvalRootNode extends RootNode {
             }
             OresObject object = new OresObject(this, klass, fields);
 
+            // Concurrency is immutable actor admission metadata, not a
+            // runtime-adjustable field. It does not increase guest parallelism.
+            int concurrencyLimit = 1;
+            for (Ast.FieldDecl field : classFields) {
+                if (!field.name().equals("concurrency")) continue;
+                if (field.initializer() instanceof Ast.LiteralExpr literal
+                        && literal.value() instanceof Number number
+                        && number.longValue() >= 1 && number.longValue() <= 1024) {
+                    concurrencyLimit = Math.toIntExact(number.longValue());
+                } else {
+                    throw new IllegalStateException(
+                            "actor concurrency must be a statically valid integer literal");
+                }
+            }
+            context.actors().configureCurrentActorConcurrency(concurrencyLimit);
+
             // Field initializers are actor-local state construction. They run
             // only after ActorRuntime has installed this actor's execution
             // context and before ready is allowed to settle.
@@ -6663,6 +6679,9 @@ public final class OresEvalRootNode extends RootNode {
                 return switch (name) {
                     case "actor_id" -> output.actorId();
                     case "sequence" -> output.sequence();
+                    case "message_sequence" -> output.messageSequence().isPresent()
+                            ? new OptionValue(true, output.messageSequence().orElseThrow())
+                            : new OptionValue(false, null);
                     case "value" -> output.value();
                     default -> throw new IllegalArgumentException(
                             "unknown ActorOutput member " + name);
@@ -6670,6 +6689,22 @@ public final class OresEvalRootNode extends RootNode {
             }
             if (receiver instanceof ActorRuntime.ActorInboxMail<?> mail) {
                 return switch (name) {
+                    case "message_id" -> mail.recipient().toString() + ":" + mail.sequence();
+                    case "send" -> (Invokable) args -> {
+                        if (args.size() > 1) {
+                            throw new IllegalArgumentException("m.send takes zero or one output value");
+                        }
+                        context.actors().emitForCurrentActorMail(
+                                mail, args.isEmpty() ? mail.value() : args.getFirst());
+                        return null;
+                    };
+                    case "done" -> (Invokable) args -> {
+                        if (!args.isEmpty()) {
+                            throw new IllegalArgumentException("m.done takes no arguments");
+                        }
+                        context.actors().finishCurrentActorMail(mail);
+                        return null;
+                    };
                     case "value" -> mail.value();
                     case "recipient" -> mail.recipient();
                     case "sender" -> mail.sender().isPresent()

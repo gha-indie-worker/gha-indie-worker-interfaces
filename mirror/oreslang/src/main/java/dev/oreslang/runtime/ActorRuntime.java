@@ -45,9 +45,10 @@ import java.util.function.UnaryOperator;
 /**
  * Host-side actor substrate used by the first interpreter.
  *
- * Oreslang follows the core Akka-style execution invariant: actors are
- * multiplexed over dispatcher threads, but one actor processes its mailbox
- * serially. Carrier-thread identity is never actor identity.
+ * Oreslang actors multiplex multiple independent in-flight message lifetimes
+ * over a single serialized guest-code lane. A suspended receive yields its
+ * lane while other admitted messages may advance. Carrier identity is never
+ * actor identity, and concurrency is not guest-code parallelism.
  *
  * PRIVATE and SHARED actors are deliberately bulkheaded onto different
  * dispatchers. Private actors also receive a confined logical memory slice;
@@ -882,7 +883,8 @@ public final class ActorRuntime implements AutoCloseable {
             if (sequence < 0) {
                 throw new IllegalArgumentException("actor mailbox sequence cannot be negative");
             }
-            return new MessageEnvelope(value, release, null, sender, sequence);
+            return new MessageEnvelope(value, new DeferredMailRelease(release),
+                    null, sender, sequence);
         }
 
         private static MessageEnvelope continuation(Runnable continuation) {
@@ -901,6 +903,36 @@ public final class ActorRuntime implements AutoCloseable {
         @Override
         public void close() {
             if (release != null) release.run();
+        }
+    }
+
+    /**
+     * A user mailbox payload retains its memory quota reservation after
+     * admission when its handler suspends. close() releases queued/synchronous
+     * messages; transfer() moves the lease into the in-flight map. Exactly one
+     * finish() releases it on done, task completion or actor retirement.
+     */
+    private static final class DeferredMailRelease implements Runnable {
+        private final Runnable delegate;
+        private final AtomicBoolean transferred = new AtomicBoolean();
+        private final AtomicBoolean finished = new AtomicBoolean();
+
+        private DeferredMailRelease(Runnable delegate) {
+            this.delegate = Objects.requireNonNull(delegate);
+        }
+
+        private void transfer() {
+            if (!transferred.compareAndSet(false, true)) {
+                throw new IllegalStateException("mail reservation already transferred");
+            }
+        }
+
+        private void finish() {
+            if (finished.compareAndSet(false, true)) delegate.run();
+        }
+
+        @Override public void run() {
+            if (!transferred.get()) finish();
         }
     }
 
@@ -1056,7 +1088,12 @@ public final class ActorRuntime implements AutoCloseable {
     public record ActorOutput<M>(
             ActorId actorId,
             long sequence,
-            M value) {
+            M value,
+            Optional<Long> messageSequence) {
+        /** Source-compatible constructor for non-message actor output. */
+        public ActorOutput(ActorId actorId, long sequence, M value) {
+            this(actorId, sequence, value, Optional.empty());
+        }
         public ActorOutput {
             Objects.requireNonNull(actorId, "actorId");
             if (sequence < 0) {
@@ -1066,6 +1103,10 @@ public final class ActorRuntime implements AutoCloseable {
             Objects.requireNonNull(
                     value,
                     "actor output values cannot be null; use Option<T>");
+            messageSequence = messageSequence == null ? Optional.empty() : messageSequence;
+            messageSequence.ifPresent(n -> {
+                if (n < 0) throw new IllegalArgumentException("negative message sequence");
+            });
         }
     }
 
@@ -1377,6 +1418,11 @@ public final class ActorRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     "self.send is only valid during an actor execution turn");
         }
+        if (cell.activeMail != null
+                && cell.codeExecutor != null
+                && cell.sourceMessages.get(cell.activeMail.sequence()) != cell.activeMail) {
+            throw new IllegalStateException("cannot emit after m.done()");
+        }
         Objects.requireNonNull(
                 value,
                 "actor output values cannot be null; use Option<T>");
@@ -1433,7 +1479,9 @@ public final class ActorRuntime implements AutoCloseable {
                         new ActorOutput<>(
                                 cell.ref.id(),
                                 sequence,
-                                prepared),
+                                prepared,
+                                cell.activeMail == null ? Optional.empty()
+                                        : Optional.of(cell.activeMail.sequence())),
                         () -> cell.releaseOutput(bytes));
                 if (!cell.outputChannel.tryWrite(envelope)) {
                     throw new IllegalStateException(
@@ -1452,10 +1500,9 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     /**
-     * Start one stackless source continuation in the current actor's logical
-     * scheduler. The scheduler's executor is mailbox-backed, so every resume
-     * is serialized with ordinary actor messages and uses no second concurrency
-     * identity or carrier pool.
+     * Actor handlers are independent stackless tasks, never parallel guest
+     * executions. A task retains the immutable identity of its source mail,
+     * even when its continuation resumes on a different physical carrier.
      */
     public <T> OresFuture<T> startActorTask(OresScheduler.Task<T> task) {
         Objects.requireNonNull(task, "task");
@@ -1464,7 +1511,72 @@ public final class ActorRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     "source actor task requires an executing actor turn");
         }
-        return cell.sourceScheduler().start(task);
+        ActorInboxMail<?> mail = cell.activeMail;
+        return cell.sourceScheduler().start(resume -> {
+            ActorInboxMail<?> previous = cell.activeMail;
+            cell.activeMail = (ActorInboxMail) mail;
+            try {
+                // Do not resurrect a handler once its completion token ended.
+                if (mail != null && !cell.sourceMessages.containsKey(mail.sequence())) {
+                    // Explicit m.done() ends this handler. Discard subsequent
+                    // queued continuations without failing its owning actor.
+                    return OresScheduler.done(null);
+                }
+                return task.resume(resume);
+            } finally {
+                cell.activeMail = (ActorInboxMail) previous;
+            }
+        });
+    }
+
+    /**
+     * Emit a message-specific output. Correlation is actor ID plus per-actor
+     * mailbox sequence; the envelope is data, never a shared mutable pointer.
+     */
+    public void emitForCurrentActorMail(ActorInboxMail<?> mail, Object value) {
+        requireCallerRuntimeAffinity("send actor mail output");
+        ActorCell<?> cell = currentActor.get();
+        if (cell == null || cell.activeMail != mail
+                || cell.sourceMessages.get(mail.sequence()) != mail) {
+            throw new SecurityException("m.send() requires an active owning mail continuation");
+        }
+        emitCurrentActorOutput(value);
+    }
+
+    /** Configure admission capacity, never actor execution parallelism. */
+    public void configureCurrentActorConcurrency(int maxInFlight) {
+        ActorCell<?> cell = currentActor.get();
+        if (cell == null || currentActorRuntime() != this
+                || cell.guestTurnOwner.get() != Thread.currentThread()) {
+            throw new SecurityException("actor concurrency may only be configured during actor startup");
+        }
+        int ceiling = cell.kind == ActorKind.UNTRUSTED ? 32 : 1024;
+        if (maxInFlight < 1 || maxInFlight > ceiling) {
+            throw new IllegalArgumentException(
+                    "actor concurrency must be in 1.." + ceiling + " for " + cell.kind);
+        }
+        synchronized (cell.lifecycleLock) {
+            if (cell.activeMail != null || !cell.sourceMessages.isEmpty()) {
+                throw new IllegalStateException("actor concurrency is fixed before first mail");
+            }
+            cell.maxConcurrentMessages = maxInFlight;
+        }
+    }
+
+    /** Complete exactly the message active on this actor's admitted turn. */
+    public void finishCurrentActorMail(ActorInboxMail<?> mail) {
+        requireCallerRuntimeAffinity("complete actor mail");
+        ActorCell<?> cell = currentActor.get();
+        if (cell == null || cell.activeMail != mail) {
+            throw new SecurityException("m.done() requires its owning message continuation");
+        }
+        synchronized (cell.lifecycleLock) {
+            if (cell.sourceMessages.remove(mail.sequence()) == null) {
+                throw new IllegalStateException("actor mail already completed: " + mail.sequence());
+            }
+            cell.finishSourceMailReservation(mail.sequence());
+        }
+        cell.schedule();
     }
 
     private boolean ownFuture(
@@ -1548,9 +1660,10 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     /**
-     * Keep one source receive logically active across stackless suspension.
-     * Until the Future settles, later user mail remains queued and only the
-     * actor's bounded runtime-continuation lane may execute.
+     * Track an independently suspended source handler. Later user messages
+     * may start up to the configured concurrency bound while this handler is
+     * waiting; completion is always delivered back through this actor's
+     * serialized continuation mailbox.
      */
     public void suspendCurrentUserMailboxUntil(OresFuture<?> future) {
         Objects.requireNonNull(future, "future");
@@ -1561,25 +1674,28 @@ public final class ActorRuntime implements AutoCloseable {
                     "suspended source receive requires an executing actor turn");
         }
 
+        final ActorInboxMail<?> mail;
         synchronized (cell.lifecycleLock) {
             if (cell.stopped.get() || cell.finalized) throw terminated(cell.ref);
-            if (cell.sourceReceiveSuspended) {
+            mail = cell.activeMail;
+            if (mail == null || !cell.sourceMessages.containsKey(mail.sequence())) {
                 throw new IllegalStateException(
-                        "actor " + cell.ref.id()
-                                + " already has a suspended source receive");
+                        "only an admitted user-mail receive may suspend");
             }
-            if (cell.activeMail == null) {
-                throw new IllegalStateException(
-                        "only an active user-mail receive may suspend the actor mailbox");
+        }
+
+        synchronized (cell.lifecycleLock) {
+            if (!cell.suspendedSourceMessages.add(mail.sequence())) {
+                throw new IllegalStateException("actor mail already suspended: " + mail.sequence());
             }
-            cell.sourceReceiveSuspended = true;
         }
 
         future.whenCompleteRuntime((ignored, failure) -> {
             if (!enqueueContinuation(cell.ref.id(), () -> {
                 synchronized (cell.lifecycleLock) {
-                    cell.sourceReceiveSuspended = false;
-                    cell.activeMail = null;
+                    cell.suspendedSourceMessages.remove(mail.sequence());
+                    cell.sourceMessages.remove(mail.sequence());
+                    cell.finishSourceMailReservation(mail.sequence());
                     cell.lifecycleLock.notifyAll();
                 }
                 if (failure != null) {
@@ -1595,8 +1711,9 @@ public final class ActorRuntime implements AutoCloseable {
             })) {
                 synchronized (cell.lifecycleLock) {
                     if (!cell.stopped.get() && !cell.finalized) {
-                        cell.sourceReceiveSuspended = false;
-                        cell.activeMail = null;
+                        cell.suspendedSourceMessages.remove(mail.sequence());
+                        cell.sourceMessages.remove(mail.sequence());
+                        cell.finishSourceMailReservation(mail.sequence());
                         cell.fail(new IllegalStateException(
                                 "actor source receive completion could not re-enter its continuation lane"));
                     }
@@ -5716,11 +5833,16 @@ public final class ActorRuntime implements AutoCloseable {
         private int queuedContinuations;
         private long nextUserMessageSequence;
         private ActorInboxMail<M> activeMail;
+        /** Active message lifetimes are independent of the one guest execution lease. */
+        private final Map<Long, ActorInboxMail<M>> sourceMessages = new LinkedHashMap<>();
+        private final Map<Long, DeferredMailRelease> sourceMessageReleases =
+                new LinkedHashMap<>();
+        private int maxConcurrentMessages = 1;
+        private int continuationBurst;
+        private final Set<Long> suspendedSourceMessages = new LinkedHashSet<>();
         /** Bounded control channel: completion threads enqueue, never invoke guest code. */
         private final ChannelRuntime.Channel<MessageEnvelope> continuationMailbox =
                 new ChannelRuntime.Channel<>(INTERNAL_CONTINUATION_SLOTS);
-        /** True while one source receive owns actor state across suspension. */
-        private boolean sourceReceiveSuspended;
         private final Object lifecycleLock = new Object();
         private final Object executionDomain = new Object();
         private int activeTurns;
@@ -5861,6 +5983,17 @@ public final class ActorRuntime implements AutoCloseable {
             }
         }
 
+        private void finishSourceMailReservation(long sequence) {
+            DeferredMailRelease reserved = sourceMessageReleases.remove(sequence);
+            if (reserved != null) reserved.finish();
+        }
+
+        private boolean sourceTaskSuspendedMail(ActorInboxMail<?> mail) {
+            synchronized (lifecycleLock) {
+                return suspendedSourceMessages.contains(mail.sequence());
+            }
+        }
+
         private boolean hasQueuedWork() {
             synchronized (lifecycleLock) {
                 return hasQueuedWorkLocked();
@@ -5868,7 +6001,9 @@ public final class ActorRuntime implements AutoCloseable {
         }
 
         private boolean hasQueuedWorkLocked() {
-            return !continuationMailbox.isEmpty() || (!sourceReceiveSuspended && !mailbox.isEmpty());
+            return !continuationMailbox.isEmpty()
+                    || ((codeExecutor == null || sourceMessages.size() < maxConcurrentMessages)
+                            && !mailbox.isEmpty());
         }
 
         private OresScheduler sourceScheduler() {
@@ -6306,11 +6441,22 @@ public final class ActorRuntime implements AutoCloseable {
                         // Stop closes the user mailbox under this same lock.
                         if (stopped.get() || finalized) break;
 
-                        // Continuations always outrank user mail. While a
-                        // source receive is suspended, user mail is not runnable.
-                        envelope = continuationMailbox.tryRead().orElse(null);
-                        if (envelope == null && !sourceReceiveSuspended) {
+                        // Control work has priority, but unbounded cooperate()
+                        // loops must not starve admissible new mail. One user
+                        // turn is admitted after every eight control turns when
+                        // more than one handler may be active.
+                        boolean mayAdmit = codeExecutor == null
+                                || sourceMessages.size() < maxConcurrentMessages;
+                        boolean grantUser = mayAdmit && maxConcurrentMessages > 1
+                                && continuationBurst >= 8 && !mailbox.isEmpty();
+                        envelope = grantUser ? mailbox.tryRead().orElse(null)
+                                : continuationMailbox.tryRead().orElse(null);
+                        if (envelope == null && mayAdmit) {
                             envelope = mailbox.tryRead().orElse(null);
+                        }
+                        if (envelope != null) {
+                            continuationBurst = envelope.isContinuation()
+                                    ? Math.min(8, continuationBurst + 1) : 0;
                         }
                     }
                     if (envelope == null) break;
@@ -6341,6 +6487,17 @@ public final class ActorRuntime implements AutoCloseable {
                                     activeEnvelope.sequence(),
                                     (M) activeEnvelope.value());
                             activeMail = mail;
+                            if (codeExecutor != null) {
+                                synchronized (lifecycleLock) {
+                                    if (sourceMessages.putIfAbsent(mail.sequence(), mail) != null) {
+                                        throw new IllegalStateException("duplicate actor message sequence");
+                                    }
+                                    DeferredMailRelease reservation =
+                                            (DeferredMailRelease) activeEnvelope.release();
+                                    reservation.transfer();
+                                    sourceMessageReleases.put(mail.sequence(), reservation);
+                                }
+                            }
                             try {
                                 if (codeExecutor != null) {
                                     if (codeActorState == null
@@ -6362,8 +6519,17 @@ public final class ActorRuntime implements AutoCloseable {
                                 } else {
                                     behavior.onMessage(mail.value(), context);
                                 }
+                                // Non-suspending handlers complete implicitly
+                                // on successful return. Async handlers retain
+                                // their slot until their completion continuation.
                             } finally {
-                                if (!sourceReceiveSuspended) activeMail = null;
+                                activeMail = null;
+                                if (codeExecutor != null && !sourceTaskSuspendedMail(mail)) {
+                                    synchronized (lifecycleLock) {
+                                        sourceMessages.remove(mail.sequence());
+                                        finishSourceMailReservation(mail.sequence());
+                                    }
+                                }
                             }
                         }
                         if (codeExecutor == null
@@ -6440,7 +6606,12 @@ public final class ActorRuntime implements AutoCloseable {
             })) {
                 // Drain all committed user-message envelopes, including after close.
             }
-            sourceReceiveSuspended = false;
+            suspendedSourceMessages.clear();
+            sourceMessages.clear();
+            for (DeferredMailRelease pending : sourceMessageReleases.values()) {
+                pending.finish();
+            }
+            sourceMessageReleases.clear();
             activeMail = null;
         }
 
