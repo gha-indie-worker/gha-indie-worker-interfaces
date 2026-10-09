@@ -1,79 +1,62 @@
-name: Build log contract parity
-
+name: Build log metadata product contract parity
 on:
   pull_request:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   contract-parity:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Check out contract authorities
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
-      - name: Check out immutable TJSV verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ORESoftware/typespec-json-schema-validator
-          ref: bd503465dab8c5148fee722b443ed04ff126c9bf
-          path: .tjsv
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.13.0'
-          package-manager-cache: false
-
-      - name: Audit TJSV production dependencies
-        working-directory: .tjsv
+      - name: Prove exact contract and fixture source head
+        shell: bash
         env:
-          TSJSV_NPM_AUDIT_RECEIPT: ${{ runner.temp }}/tjsv-npm-audit-receipt.json
-        run: node ./scripts/npm-audit-gate.mjs
-
-      - name: Install TJSV lockfile-pinned toolchain
-        working-directory: .tjsv
-        run: npm ci --omit=dev
-
-      - name: Compare independent TypeSpec and JSON Schema authorities
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          node .tjsv/bin/typespec-json-schema-validator.mjs check \
-            --typespec=contracts/build-log.tsp \
-            --schema=contracts/build-log.schema.json \
-            --instances=contracts/instances \
-            --report=.typespec-json-schema-validator/report.json \
-            --sarif=.typespec-json-schema-validator/report.sarif \
-            --contract-ir=.typespec-json-schema-validator/contract-ir.json \
-            --output-dir=.typespec-json-schema-validator/generated \
-            --max-probes=64 \
-            --int64-strategy=string \
-            --seal-object-schemas=true \
-            --polymorphic-models-strategy=oneOf
-
-      - name: Verify current checked-out inputs before consumption
-        env:
-          TSJSV_VERIFY_IR: .typespec-json-schema-validator/contract-ir.json
-          TSJSV_VERIFY_REPORT: .typespec-json-schema-validator/report.json
-          TSJSV_VERIFY_TYPESPEC: contracts/build-log.tsp
-          TSJSV_VERIFY_AUTHORED: contracts/build-log.schema.json
-          TSJSV_VERIFY_GENERATED: .typespec-json-schema-validator/generated/typespec.generated.schema.json
-          TSJSV_VERIFY_DECLARATIONS: '["GhaIndieWorker.BuildLogEvent","GhaIndieWorker.BuildLogMetadata","GhaIndieWorker.BuildLogStream"]'
-          TSJSV_VERIFY_VERIFICATION: .typespec-json-schema-validator/consumer-verification.json
-        run: node .tjsv/scripts/verify-consumer.mjs
-
-      - name: Retain deterministic contract evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Compare independent build-log TypeSpec and Draft 2020-12 Schema A
+        uses: ORESoftware/typespec-json-schema-validator@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
         with:
-          name: build-log-contract-evidence
-          path: .typespec-json-schema-validator/
-          if-no-files-found: error
+          typespec: contracts/build-log.tsp
+          schema: contracts/build-log.schema.json
+          instances: contracts/instances
+          report: .typespec-json-schema-validator/build-log/report.json
+          sarif: .typespec-json-schema-validator/build-log/report.sarif
+          contract_ir: .typespec-json-schema-validator/build-log/contract-ir.json
+          output_dir: .typespec-json-schema-validator/build-log/generated
+          max_probes: "96"
+          int64_strategy: string
+          seal_object_schemas: "true"
+          polymorphic_models_strategy: oneOf
+      - name: Verify fresh full-scope Contract IR and seven canonical refusals
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
+        with:
+          contract_ir: .typespec-json-schema-validator/build-log/contract-ir.json
+          report: .typespec-json-schema-validator/build-log/report.json
+          typespec: contracts/build-log.tsp
+          schema: contracts/build-log.schema.json
+          generated_schema: .typespec-json-schema-validator/build-log/generated/typespec.generated.schema.json
+          expected_declarations: '["GhaIndieWorker.BuildLogEvent","GhaIndieWorker.BuildLogMetadata","GhaIndieWorker.BuildLogStream"]'
+          verification: .typespec-json-schema-validator/build-log/verification.json
+      - name: Confirm both human-authored authorities remain unchanged
+        run: git diff --exit-code -- contracts/build-log.tsp contracts/build-log.schema.json
+      - name: Preserve contract IR, report, differential and negative receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: build-log-contract-head-${{ github.run_id }}
+          path: .typespec-json-schema-validator/build-log/
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
 
   rust-interface:
     runs-on: ubuntu-latest
