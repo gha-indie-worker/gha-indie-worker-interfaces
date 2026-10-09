@@ -38,6 +38,9 @@ public final class OwnershipChecker {
     private final Map<String, Ast.FunctionDecl> functions = new HashMap<>();
     private final Map<String, Ast.ClassDecl> classes = new HashMap<>();
     private final Set<String> modules = new HashSet<>();
+    /** Local module declarations permit precise write checks; imported module
+     * writes remain fail-closed without a linked field contract. */
+    private final Map<String, Ast.ModuleDecl> moduleDeclarations = new HashMap<>();
     private final Set<String> importedNamespaceValues = new HashSet<>();
     private final Set<String> importedActorTypes = new HashSet<>();
     private final Set<String> importedModuleTypes = new HashSet<>();
@@ -78,6 +81,7 @@ public final class OwnershipChecker {
         }
         for (Ast.ModuleDecl module : program.modules()) {
             modules.add(module.name());
+            moduleDeclarations.put(module.name(), module);
             for (Ast.Decl decl : module.declarations()) {
                 if (decl instanceof Ast.FunctionDecl fn) index(functions, ambiguousFunctions, module.name(), fn.name(), fn);
                 else if (decl instanceof Ast.ClassDecl klass) index(classes, ambiguousClasses, module.name(), klass.name(), klass);
@@ -1630,6 +1634,28 @@ public final class OwnershipChecker {
             return;
         }
         if (target instanceof Ast.MemberExpr member) {
+            if (member.receiver() instanceof Ast.NameExpr name
+                    && scope.lookup(name.name()) == null
+                    && moduleDeclarations.containsKey(name.name())) {
+                Ast.ModuleDecl module = moduleDeclarations.get(name.name());
+                Ast.FieldDecl field = null;
+                for (Ast.Decl declaration : module.declarations()) {
+                    if (declaration instanceof Ast.FieldDecl candidate
+                            && candidate.name().equals(member.member())) {
+                        field = candidate;
+                        break;
+                    }
+                }
+                if (field == null || field.visibility() != Ast.Visibility.PUBLIC) {
+                    throw error("module '" + module.name()
+                            + "' has no public mutable field '" + member.member() + "'");
+                }
+                if (field.bindingKind() != Ast.BindingKind.LET) {
+                    throw error("module field '" + module.name() + "." + member.member()
+                            + "' is immutable");
+                }
+                return; // module namespace is not an ordinary mutable value
+            }
             Ast.ClassDecl klass = classOfReceiver(member.receiver(), scope);
             if (klass != null) {
                 Ast.FieldDecl field = findField(klass, member.member(), new LinkedHashSet<>());

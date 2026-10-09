@@ -137,6 +137,8 @@ public final class OresEvalRootNode extends RootNode {
         private final Map<String, Ast.InterfaceDecl> interfaces = new HashMap<>();
         private final Map<String, Ast.TypeAliasDecl> typeAliases = new HashMap<>();
         private final Map<String, Ast.ModuleDecl> modules = new HashMap<>();
+        /** ROOT process storage only. Actors allocate module slots in ActorCell. */
+        private final Map<String, ModuleState> rootModuleStates = new HashMap<>();
         private final IdentityHashMap<Ast.MethodDecl, Ast.ClassDecl> methodOwners = new IdentityHashMap<>();
 
         private final Map<String, ImportedBinding> namedImports = new HashMap<>();
@@ -4117,6 +4119,9 @@ public final class OresEvalRootNode extends RootNode {
             }
             if (target instanceof Ast.MemberExpr member) {
                 Object receiver = eval(member.receiver(), env);
+                if (receiver instanceof ModuleFacade module) {
+                    return module.owner().assignModuleField(module.module(), member.member(), value);
+                }
                 if (receiver instanceof OresObject object) {
                     OwnedField targetField =
                             object.owner.findField(
@@ -7172,8 +7177,7 @@ public final class OresEvalRootNode extends RootNode {
                     if (decl instanceof Ast.FieldDecl field
                             && field.visibility() == Ast.Visibility.PUBLIC
                             && field.name().equals(name)) {
-                        if (field.initializer() == null) throw new IllegalArgumentException("exported binding has no initializer: " + name);
-                        return eval(field.initializer(), new Env(null));
+                        return moduleField(candidate, field);
                     }
                 }
             }
@@ -7287,6 +7291,90 @@ public final class OresEvalRootNode extends RootNode {
             return Path.of(id).normalize().toString().replace('\\', '/');
         }
 
+        /**
+         * Module declarations are shared immutable executable code. Mutable
+         * module fields belong to the calling ROOT process or actor, even if
+         * the module was imported from another linked code unit.
+         */
+        private ModuleState moduleState(Ast.ModuleDecl module) {
+            if (ActorRuntime.currentActorId().isPresent()) {
+                if (ActorRuntime.currentActorRuntime() != context.actors()) {
+                    throw new SecurityException("cross-runtime module state access");
+                }
+                return (ModuleState) context.actors().currentActorModuleState(
+                        codeUnitId, module.name(), ModuleState::new);
+            }
+            if (OresScheduler.current() != context.vm().rootScheduler()) {
+                throw new SecurityException(
+                        "mutable module state requires an owned ROOT or actor turn; "
+                        + "supervisor and mailman state isolation is not lowered yet");
+            }
+            return rootModuleStates.computeIfAbsent(module.name(), ignored -> new ModuleState());
+        }
+
+        private Ast.FieldDecl findModuleField(Ast.ModuleDecl module, String name) {
+            for (Ast.Decl declaration : module.declarations()) {
+                if (declaration instanceof Ast.FieldDecl field && field.name().equals(name)) {
+                    return field;
+                }
+            }
+            return null;
+        }
+
+        private Object moduleField(Ast.ModuleDecl module, Ast.FieldDecl field) {
+            if (field.initializer() == null) {
+                throw new IllegalArgumentException("module field has no initializer: "
+                        + module.name() + "." + field.name());
+            }
+            return moduleState(module).read(
+                    field.name(),
+                    () -> eval(field.initializer(),
+                            new Env(null, false, null, null, module.name())));
+        }
+
+        private Object assignModuleField(Ast.ModuleDecl module, String name, Object value) {
+            Ast.FieldDecl field = findModuleField(module, name);
+            if (field == null || field.visibility() != Ast.Visibility.PUBLIC) {
+                throw new IllegalArgumentException(
+                        "module '" + module.name() + "' does not export field '" + name + "'");
+            }
+            if (field.bindingKind() != Ast.BindingKind.LET) {
+                throw new IllegalArgumentException(
+                        "module field '" + module.name() + "." + name + "' is immutable");
+            }
+            // Force declaration's initializer once before mutating, even when
+            // the first operation is assignment; never mutate a code image.
+            moduleField(module, field);
+            moduleState(module).write(name, value);
+            return value;
+        }
+
+        private static final class ModuleState {
+            private final Map<String, Object> fields = new HashMap<>();
+            private final Set<String> initializing = new LinkedHashSet<>();
+
+            private Object read(String name, java.util.function.Supplier<Object> initializer) {
+                if (fields.containsKey(name)) return fields.get(name);
+                if (!initializing.add(name)) {
+                    throw new IllegalStateException("recursive module field initializer: " + name);
+                }
+                try {
+                    Object value = initializer.get();
+                    fields.put(name, value);
+                    return value;
+                } finally {
+                    initializing.remove(name);
+                }
+            }
+
+            private void write(String name, Object value) {
+                if (!fields.containsKey(name)) {
+                    throw new IllegalStateException("uninitialized module field: " + name);
+                }
+                fields.put(name, value);
+            }
+        }
+
         private Object moduleMember(Ast.ModuleDecl module, String name) {
             List<Ast.FunctionDecl> callableFamily = module.declarations().stream()
                     .filter(Ast.FunctionDecl.class::isInstance)
@@ -7319,9 +7407,9 @@ public final class OresEvalRootNode extends RootNode {
                         && klass.visibility() == Ast.Visibility.PUBLIC) {
                     return new ClassFacade(this, klass);
                 }
-                if (decl instanceof Ast.FieldDecl field && field.name().equals(name) && field.visibility() == Ast.Visibility.PUBLIC) {
-                    if (field.initializer() == null) throw new IllegalArgumentException("module field has no initializer: " + module.name() + "." + name);
-                    return eval(field.initializer(), new Env(null));
+                if (decl instanceof Ast.FieldDecl field && field.name().equals(name)
+                        && field.visibility() == Ast.Visibility.PUBLIC) {
+                    return moduleField(module, field);
                 }
             }
             throw new IllegalArgumentException("module '" + module.name() + "' does not export '" + name + "'");

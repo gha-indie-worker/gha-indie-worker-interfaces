@@ -4237,6 +4237,28 @@ public final class TypeChecker {
             Set<String> generics,
             Type self,
             boolean writing) {
+        // A module namespace is immutable code, but its declared LET fields
+        // are mutable storage in the current actor/ROOT process. Do not infer
+        // write permission from the module's structural Record shape.
+        if (writing && member.receiver() instanceof Ast.NameExpr name
+                && env.lookup(name.name()) == null
+                && modules.containsKey(name.name())) {
+            Ast.ModuleDecl module = modules.get(name.name());
+            Ast.FieldDecl targetField = null;
+            for (Ast.Decl declaration : module.declarations()) {
+                if (declaration instanceof Ast.FieldDecl field
+                        && field.name().equals(member.member())
+                        && field.visibility() == Ast.Visibility.PUBLIC) {
+                    targetField = field;
+                    break;
+                }
+            }
+            if (targetField == null || targetField.bindingKind() != Ast.BindingKind.LET) {
+                throw new IllegalArgumentException(
+                        "module field '" + name.name() + "." + member.member()
+                                + "' is not a public mutable let binding");
+            }
+        }
         Type rawReceiver;
         if (member.receiver() instanceof Ast.NameExpr name && env.lookup(name.name()) != null) {
             Env.Binding binding = env.lookup(name.name());
