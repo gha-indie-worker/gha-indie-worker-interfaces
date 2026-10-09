@@ -348,6 +348,7 @@ mod tests {
         queued: u8,
         delivered: u8,
         owning_carrier: Option<u8>,
+        active_guest_stacks: u8,
         stopped: bool,
     }
 
@@ -362,6 +363,7 @@ mod tests {
                 queued: 2,
                 delivered: 0,
                 owning_carrier: None,
+                active_guest_stacks: 0,
                 stopped: false,
             };
             Self { actors: [actor, actor] }
@@ -369,6 +371,12 @@ mod tests {
 
         fn invariant(&self) -> Result<(), &'static str> {
             for actor in &self.actors {
+                if actor.active_guest_stacks > 1 {
+                    return Err("two guest stacks entered one shared actor");
+                }
+                if (actor.active_guest_stacks == 1) != actor.owning_carrier.is_some() {
+                    return Err("actor turn ownership and guest execution disagree");
+                }
                 if actor.delivered > 2
                     || actor.queued + actor.delivered
                         + u8::from(actor.owning_carrier.is_some()) > 2 {
@@ -410,6 +418,7 @@ mod tests {
                         let mut next = state.clone();
                         next.actors[actor_index].queued -= 1;
                         next.actors[actor_index].owning_carrier = Some(carrier);
+                        next.actors[actor_index].active_guest_stacks = 1;
                         next.invariant().unwrap();
                         if visited.insert(next.clone()) { queue.push_back(next); }
                     }
@@ -418,6 +427,7 @@ mod tests {
                 if actor.owning_carrier.is_some() {
                     let mut next = state.clone();
                     next.actors[actor_index].owning_carrier = None;
+                    next.actors[actor_index].active_guest_stacks = 0;
                     next.actors[actor_index].delivered += 1;
                     observed_carrier_handoff |= next.actors[actor_index].queued > 0;
                     next.invariant().unwrap();
@@ -443,12 +453,12 @@ mod tests {
 
     #[test]
     fn mutation_oracle_rejects_double_claim_of_actor_carrier() {
-        // Broken design: another carrier is admitted before first release.
-        // The concrete actor needs CAS ownership and activeTurns <= 1.
-        let mut active_turns = 1_u8;
-        active_turns += 1;
-        assert!(active_turns > 1, "mutation oracle must witness broken admission");
-        assert!(SharedActors::initial().invariant().is_ok());
+        let mut broken = SharedActors::initial();
+        broken.actors[0].queued = 1;
+        broken.actors[0].owning_carrier = Some(0);
+        broken.actors[0].active_guest_stacks = 2; // Second carrier entered illegally.
+        assert_eq!(broken.invariant(),
+            Err("two guest stacks entered one shared actor"));
     }
 
 }
