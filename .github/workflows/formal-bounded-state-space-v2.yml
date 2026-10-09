@@ -18,3 +18,9 @@ jobs:
           const inv=s=>s.double_owners===0&&s.stale_completions===0&&s.completed<=s.epoch;
           let f=[initial],seen=new Map([[JSON.stringify(initial),initial]]);for(let d=0;d<=bound;d++){const n=[];for(const s of f){assert(inv(s));for(const [name,step] of steps){const t=step(structuredClone(s));assert(inv(t),`${name} violated worker invariant`);const k=JSON.stringify(t);if(!seen.has(k)){seen.set(k,t);n.push(t)}}}f=n}assert(seen.size>=3);console.log(`worker formal model OK states=${seen.size} bound=${bound}`);
           NODE
+      - name: Checkout exact mirrored source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check Oreslang process-turn model using Rust
+        run: cargo test --manifest-path formal/process-turns/Cargo.toml -- --nocapture
