@@ -33,4 +33,4 @@ jobs:
       - name: Test exact mirrored Oreslang actor guest lane and warmup
         run: |
           cd mirror/oreslang
-          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorAffinityDispatcherTest,SharedActorSingleFlightContractTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorAffinityDispatcherTest,SharedActorSingleFlightContractTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
