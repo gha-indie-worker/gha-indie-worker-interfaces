@@ -96,12 +96,50 @@ final class SharedActorSingleFlightContractTest {
     }
 
     @Test
-    void immutableSharedValueHasStablePayloadDuringRuntimeClose() {
+    void immutableSharedValueHasStablePayloadDuringRuntimeClose() throws Exception {
         ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer());
-        // A data-only immutable snapshot cannot be replaced with null on teardown.
-        Object immutable = ActorRuntime.freeze(Map.of("version", 1));
-        assertEquals(Map.of("version", 1), immutable);
+        ArrayList<String> writable = new ArrayList<>(List.of("version-one"));
+        ActorRuntime.Shared<List<String>> published = runtime.shareReadonly(writable);
+        writable.set(0, "version-two");
+
+        var immutableSnapshot = published.value();
+        assertEquals(List.of("version-one"), immutableSnapshot,
+                "publication must never alias a mutable host container");
+        assertThrows(UnsupportedOperationException.class,
+                () -> immutableSnapshot.add("cross-actor-write"));
+
+        java.util.concurrent.atomic.AtomicReference<Throwable> unexpected =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        CountDownLatch ready = new CountDownLatch(1);
+        CountDownLatch start = new CountDownLatch(1);
+        Thread reader = Thread.ofPlatform().start(() -> {
+            ready.countDown();
+            try {
+                start.await();
+                for (int n = 0; n < 2000; n++) {
+                    try {
+                        List<String> snapshot = published.value();
+                        if (snapshot == null || !snapshot.equals(List.of("version-one"))) {
+                            throw new AssertionError("shared immutable payload mutated during close");
+                        }
+                    } catch (IllegalStateException closed) {
+                        // Access denied after runtime close is correct.
+                        return;
+                    }
+                }
+            } catch (Throwable failure) {
+                unexpected.set(failure);
+            }
+        });
+        assertTrue(ready.await(5, TimeUnit.SECONDS));
+        start.countDown();
         runtime.close();
-        assertEquals(Map.of("version", 1), immutable);
+        reader.join(5000);
+        assertFalse(reader.isAlive());
+        assertNull(unexpected.get());
+        assertEquals(List.of("version-one"), immutableSnapshot,
+                "already-published frozen snapshots survive runtime retirement");
+        assertThrows(IllegalStateException.class, published::value);
     }
+
 }
