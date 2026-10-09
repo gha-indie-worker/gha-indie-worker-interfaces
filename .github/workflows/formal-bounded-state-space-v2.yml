@@ -7,7 +7,7 @@ permissions:
 jobs:
   model-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Prove single-owner task epochs and stale completion rejection
         run: |
@@ -18,3 +18,12 @@ jobs:
           const inv=s=>s.double_owners===0&&s.stale_completions===0&&s.completed<=s.epoch;
           let f=[initial],seen=new Map([[JSON.stringify(initial),initial]]);for(let d=0;d<=bound;d++){const n=[];for(const s of f){assert(inv(s));for(const [name,step] of steps){const t=step(structuredClone(s));assert(inv(t),`${name} violated worker invariant`);const k=JSON.stringify(t);if(!seen.has(k)){seen.set(k,t);n.push(t)}}}f=n}assert(seen.size>=3);console.log(`worker formal model OK states=${seen.size} bound=${bound}`);
           NODE
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Exact-source Oreslang scheduler and timer refinement
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
