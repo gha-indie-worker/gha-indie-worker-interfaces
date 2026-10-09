@@ -32,6 +32,8 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all-targets
+      - name: Verify exact mirrored Oreslang Rust process-turn model
+        run: cargo test --manifest-path formal/process-turns/Cargo.toml -- --nocapture
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

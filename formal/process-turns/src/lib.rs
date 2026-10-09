@@ -78,6 +78,9 @@ mod tests {
             if self.running.is_some() != (self.call_depth > 0) {
                 return Err("nested-call depth and guest-turn ownership disagree");
             }
+            if self.stop_requested && self.running.is_none() {
+                return Err("stop requested without an owned turn to observe it");
+            }
             if self.call_depth > 2 {
                 return Err("model nesting bound exceeded");
             }
@@ -163,7 +166,8 @@ mod tests {
         let mut next = world.clone();
         let p = &mut next.processes[index];
         match action {
-            Action::AdmitGuestTurn if p.alive && p.running.is_none() && !p.ready.is_empty() => {
+            Action::AdmitGuestTurn if p.alive && !p.stop_requested
+                && p.running.is_none() && !p.ready.is_empty() => {
                 let turn = p.ready.remove(0);
                 p.running = Some(turn);
                 p.active_guest_stacks += 1;
@@ -186,18 +190,25 @@ mod tests {
             }
             Action::AwaitExternal if p.running == Some(Turn::Main)
                 && p.call_depth == 1 && p.alive => {
-                p.running = None;
-                p.active_guest_stacks = 0;
-                p.call_depth = 0;
-                p.main = Main::Suspended;
-                p.waiting = Wait::External;
+                if p.stop_requested {
+                    // Yield is a cancellation safepoint, not a way to escape fencing.
+                    p.exit();
+                } else {
+                    p.running = None;
+                    p.active_guest_stacks = 0;
+                    p.call_depth = 0;
+                    p.main = Main::Suspended;
+                    p.waiting = Wait::External;
+                }
             }
             Action::AwaitTimer if p.running == Some(Turn::Main)
                 && p.call_depth == 1 && p.alive
-                && p.timer != Timer::Absent && p.timer != Timer::Cancelled => {
+                && (p.timer == Timer::Armed || p.timer_signal) => {
                 if p.timer_signal {
                     // select/readch claims a ready signal without suspending.
                     p.timer_signal = false;
+                } else if p.stop_requested {
+                    p.exit();
                 } else {
                     p.running = None;
                     p.active_guest_stacks = 0;
@@ -211,7 +222,8 @@ mod tests {
                 p.main = Main::Queued;
                 p.ready.push(Turn::Main); // Never execute on producer thread.
             }
-            Action::ExpireTimer if p.alive && p.timer == Timer::Armed => {
+            Action::ExpireTimer if p.alive && !p.stop_requested
+                && p.timer == Timer::Armed => {
                 p.timer = Timer::Expired;
                 p.timer_signal = true;
                 p.ready.push(Turn::TimerCallback); // No inline guest callback.
