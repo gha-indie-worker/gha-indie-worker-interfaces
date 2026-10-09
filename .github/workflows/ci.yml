@@ -34,6 +34,15 @@ jobs:
         run: cargo test --all-targets
       - name: Verify exact mirrored Oreslang Rust process-turn model
         run: cargo test --manifest-path formal/process-turns/Cargo.toml -- --nocapture
+      - name: Install Java 21 for exact mirrored Oreslang JVM proof
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and execute Oreslang actor ownership and immutable mail tests
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest,ActorAffinityDispatcherTest,SharedActorSingleFlightContractTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorImmutableSharedTransportTest test
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings
