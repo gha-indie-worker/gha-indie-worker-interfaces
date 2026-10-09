@@ -32,6 +32,15 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all-targets
+      - name: Install Java 21 for Oreslang runtime proof
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and test exact-source Oreslang JVM mirror
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings
