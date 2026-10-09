@@ -80,7 +80,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           cd mirror/oreslang
-          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=ActorModuleStateOwnershipTest,ModuleFieldOwnershipTest,ActorConcurrentMailboxExecutionTest,SupervisorModuleGenerationTest,RtShareReadonlyProjectionTest,LinkedModuleContractEnforcementTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorImmutableSharedTransportTest,ActorSharedCodeImageWhitelistTest,SharedActorSingleFlightContractTest test
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=ActorModuleStateOwnershipTest,ModuleFieldOwnershipTest,ActorConcurrentMailboxExecutionTest,ActorGroupMailmanTest,SourceActorSpawnExecutionTest,ActorCooperateOrderingTest,ActorSharedMailboxAccountingTest,ActorStructuredCancellationTest,SupervisorModuleGenerationTest,RtShareReadonlyProjectionTest,LinkedModuleContractEnforcementTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorImmutableSharedTransportTest,ActorSharedCodeImageWhitelistTest,SharedActorSingleFlightContractTest test
 
   rust-witness:
     needs: parity

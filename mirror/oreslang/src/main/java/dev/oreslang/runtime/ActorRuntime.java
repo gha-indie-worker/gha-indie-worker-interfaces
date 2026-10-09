@@ -1418,10 +1418,12 @@ public final class ActorRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     "self.send is only valid during an actor execution turn");
         }
-        if (cell.activeMail != null
-                && cell.codeExecutor != null
-                && cell.sourceMessages.get(cell.activeMail.sequence()) != cell.activeMail) {
-            throw new IllegalStateException("cannot emit after m.done()");
+        if (cell.activeMail != null && cell.codeExecutor != null) {
+            synchronized (cell.lifecycleLock) {
+                if (cell.sourceMessages.get(cell.activeMail.sequence()) != cell.activeMail) {
+                    throw new IllegalStateException("cannot emit after m.done()");
+                }
+            }
         }
         Objects.requireNonNull(
                 value,
@@ -1517,10 +1519,15 @@ public final class ActorRuntime implements AutoCloseable {
             cell.activeMail = (ActorInboxMail) mail;
             try {
                 // Do not resurrect a handler once its completion token ended.
-                if (mail != null && !cell.sourceMessages.containsKey(mail.sequence())) {
-                    // Explicit m.done() ends this handler. Discard subsequent
-                    // queued continuations without failing its owning actor.
-                    return OresScheduler.done(null);
+                if (mail != null && cell.codeExecutor != null) {
+                    synchronized (cell.lifecycleLock) {
+                        if (!cell.sourceMessages.containsKey(mail.sequence())
+                                || cell.stopped.get()) {
+                            // Explicit m.done()/termination never resurrects
+                            // an old continuation on a reused carrier.
+                            return OresScheduler.done(null);
+                        }
+                    }
                 }
                 return task.resume(resume);
             } finally {
@@ -1536,9 +1543,13 @@ public final class ActorRuntime implements AutoCloseable {
     public void emitForCurrentActorMail(ActorInboxMail<?> mail, Object value) {
         requireCallerRuntimeAffinity("send actor mail output");
         ActorCell<?> cell = currentActor.get();
-        if (cell == null || cell.activeMail != mail
-                || cell.sourceMessages.get(mail.sequence()) != mail) {
-            throw new SecurityException("m.send() requires an active owning mail continuation");
+        if (cell == null || cell.activeMail != mail) {
+            throw new SecurityException("m.send() requires its owning message continuation");
+        }
+        synchronized (cell.lifecycleLock) {
+            if (cell.sourceMessages.get(mail.sequence()) != mail || cell.stopped.get()) {
+                throw new SecurityException("m.send() requires an unfinished message");
+            }
         }
         emitCurrentActorOutput(value);
     }
@@ -2487,7 +2498,12 @@ public final class ActorRuntime implements AutoCloseable {
                                         sender,
                                         group.id,
                                         sequence,
-                                        (Out) frozen.value()),
+                                        (Out) frozen.value(),
+                                        currentActor.get() != null
+                                                && currentActor.get().ref.id().equals(sender)
+                                                && currentActor.get().activeMail != null
+                                                        ? Optional.of(currentActor.get().activeMail.sequence())
+                                                        : Optional.empty()),
                                 frozen.reservation());
 
                 if (!outbox.tryWrite(envelope)) {
@@ -5832,7 +5848,7 @@ public final class ActorRuntime implements AutoCloseable {
         /** Separate control-lane quota; never borrow user mailbox headroom. */
         private int queuedContinuations;
         private long nextUserMessageSequence;
-        private ActorInboxMail<M> activeMail;
+        private volatile ActorInboxMail<M> activeMail;
         /** Active message lifetimes are independent of the one guest execution lease. */
         private final Map<Long, ActorInboxMail<M>> sourceMessages = new LinkedHashMap<>();
         private final Map<Long, DeferredMailRelease> sourceMessageReleases =
