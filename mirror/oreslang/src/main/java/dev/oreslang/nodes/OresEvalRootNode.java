@@ -766,6 +766,7 @@ public final class OresEvalRootNode extends RootNode {
             for (int i = 0; i < parameters.size(); i++) {
                 Ast.Param param = parameters.get(i);
                 Object value = args.get(i);
+                requireOrdinaryCallableData(value, new IdentityHashMap<>(), 0, label);
                 tuple.add(value);
                 env.define(
                         param.name(),
@@ -776,6 +777,59 @@ public final class OresEvalRootNode extends RootNode {
                     "arguments",
                     java.util.Collections.unmodifiableList(tuple),
                     Ast.BindingKind.CONST);
+        }
+
+        /**
+         * Guest-call boundary defense in depth: a namespace or actor handle
+         * must never be smuggled through imported functions, closures,
+         * untyped host interop or nested collection/struct arguments.
+         * No user locks are needed: this is an admission/type policy check.
+         */
+        private static void requireOrdinaryCallableData(
+                Object value, IdentityHashMap<Object, Boolean> visiting,
+                int depth, String boundary) {
+            if (value == null) return;
+            if (depth > 128) {
+                throw new IllegalArgumentException(boundary
+                        + " callable argument graph exceeds maximum ownership depth");
+            }
+            if (value instanceof ActorRuntime.ActorRef<?>
+                    || value instanceof ModuleFacade
+                    || value instanceof ClassFacade
+                    || value instanceof ImportedNamespace
+                    || value instanceof HostClassFacade
+                    || value instanceof Ast.ClassDecl
+                    || value instanceof Ast.ModuleDecl
+                    || value instanceof SharedCodeImageStore.CodeImage
+                    || (value instanceof OresObject obj
+                        && obj.klass.actorKind() != Ast.ActorKind.NONE)) {
+                throw new IllegalArgumentException(boundary
+                        + " cannot pass actors, actor references, modules or class namespaces; "
+                        + "use static members or explicit ActorRef.send");
+            }
+            if (visiting.put(value, Boolean.TRUE) != null) return;
+            try {
+                if (value instanceof OresObject obj) {
+                    for (Object field : obj.fields.values()) {
+                        requireOrdinaryCallableData(field, visiting, depth + 1, boundary);
+                    }
+                } else if (value instanceof List<?> list) {
+                    for (Object child : list) {
+                        requireOrdinaryCallableData(child, visiting, depth + 1, boundary);
+                    }
+                } else if (value instanceof Map<?, ?> map) {
+                    for (Map.Entry<?, ?> e : map.entrySet()) {
+                        requireOrdinaryCallableData(e.getKey(), visiting, depth + 1, boundary);
+                        requireOrdinaryCallableData(e.getValue(), visiting, depth + 1, boundary);
+                    }
+                } else if (value instanceof Object[] arr) {
+                    for (Object child : arr) {
+                        requireOrdinaryCallableData(child, visiting, depth + 1, boundary);
+                    }
+                }
+            } finally {
+                visiting.remove(value);
+            }
         }
 
         private Object callFunction(Ast.FunctionDecl fn, List<?> args) {

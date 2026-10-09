@@ -2,6 +2,7 @@ package dev.oreslang.types;
 
 import dev.oreslang.ast.AnnotationExpander;
 import dev.oreslang.ast.Ast;
+import dev.oreslang.imports.ImportRules;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -37,6 +38,7 @@ public final class OwnershipChecker {
     private final Map<String, Ast.FunctionDecl> functions = new HashMap<>();
     private final Map<String, Ast.ClassDecl> classes = new HashMap<>();
     private final Set<String> modules = new HashSet<>();
+    private final Set<String> importedNamespaceValues = new HashSet<>();
     private final Set<String> ambiguousFunctions = new HashSet<>();
     private final Set<String> ambiguousClasses = new HashSet<>();
     private int mutexCriticalSectionDepth;
@@ -54,6 +56,21 @@ public final class OwnershipChecker {
     }
 
     private void index(Ast.Program program) {
+        for (Ast.ImportDecl imported : program.imports()) {
+            if (imported.wildcard()) {
+                if (imported.namespace() != null
+                        && !imported.namespace().isBlank()) {
+                    importedNamespaceValues.add(imported.namespace());
+                }
+            } else if (imported.kind() == Ast.ImportKind.MODULE
+                    || imported.kind() == Ast.ImportKind.CLASS
+                    || imported.kind() == Ast.ImportKind.ACTOR
+                    || imported.kind() == Ast.ImportKind.ALL) {
+                for (String name : imported.names()) {
+                    importedNamespaceValues.add(ImportRules.localName(imported, name));
+                }
+            }
+        }
         for (Ast.ModuleDecl module : program.modules()) {
             modules.add(module.name());
             for (Ast.Decl decl : module.declarations()) {
@@ -82,6 +99,9 @@ public final class OwnershipChecker {
     }
 
     private void checkFunction(Ast.FunctionDecl fn) {
+        for (Ast.Param param : fn.parameters()) {
+            rejectActorOrNamespaceParameter(param.type(), "function " + fn.name());
+        }
         Scope scope = new Scope(null, fn.nonLexical());
         for (Ast.Param param : fn.parameters()) {
             scope.define(param.name(), stateForParam(param));
@@ -110,6 +130,9 @@ public final class OwnershipChecker {
 
         if (klass.constructor() != null) {
             Ast.ConstructorDecl constructor = klass.constructor();
+            for (Ast.Param param : constructor.parameters()) {
+                rejectActorOrNamespaceParameter(param.type(), "constructor " + klass.name());
+            }
             Scope scope = new Scope(null);
             scope.define("self", new VarState(
                     Ast.TypeRef.borrowed(Ast.TypeRef.simple(klass.name()), true),
@@ -130,6 +153,9 @@ public final class OwnershipChecker {
         }
 
         for (Ast.MethodDecl method : klass.methods()) {
+            for (Ast.Param param : method.parameters()) {
+                rejectActorOrNamespaceParameter(param.type(), "method " + klass.name() + "." + method.name());
+            }
             Scope scope = new Scope(null);
             if (!method.isStatic()) {
                 if (klass.actorKind() != Ast.ActorKind.NONE) {
@@ -749,6 +775,7 @@ public final class OwnershipChecker {
                 throw error("rt " + runtime.operation() + " expects exactly one argument");
             }
             Ast.Expr argument = runtime.arguments().getFirst();
+            rejectNonFirstClassArgument(argument, scope, "rt " + runtime.operation());
             return switch (runtime.operation()) {
                 case "borrow" -> {
                     VarState owner = borrowOwner(argument, scope);
@@ -1059,6 +1086,16 @@ public final class OwnershipChecker {
     }
 
     private ValueInfo checkCall(Ast.CallExpr call, Scope scope) {
+        // ActorRef.send(...) is a dedicated mailbox primitive rather than a
+        // userland function that takes an actor as a first-class argument.
+        boolean mailboxSend = call.callee() instanceof Ast.MemberExpr method
+                && method.member().equals("send")
+                && isActorRefExpression(method.receiver(), scope);
+        if (!mailboxSend) {
+            for (Ast.Expr arg : call.arguments()) {
+                rejectNonFirstClassArgument(arg, scope, "callable argument");
+            }
+        }
         if (isBooleanIntrinsicCall(call, scope)) {
             for (Ast.Expr argument : call.arguments()) {
                 checkExpr(argument, scope, false);
@@ -1515,6 +1552,8 @@ public final class OwnershipChecker {
             Scope scope,
             String callable,
             int position) {
+        rejectNonFirstClassArgument(arg, scope, callable + " argument " + position);
+        rejectActorOrNamespaceParameter(param.type(), callable);
         if (arg instanceof Ast.RuntimeCallExpr runtime && runtime.operation().equals("borrow")
                 && runtime.arguments().size() == 1) {
             arg = new Ast.UnaryExpr("&", runtime.arguments().getFirst());
@@ -2912,6 +2951,83 @@ public final class OwnershipChecker {
         if (left.name().equals("$infer$")) return right;
         if (right.name().equals("$infer$")) return left;
         return Ast.TypeRef.union(List.of(left, right));
+    }
+
+    /**
+     * Actors and namespace objects are code/control identities, never data
+     * parameters. ActorRef is a routing capability, not a transferable actor
+     * object: callers may use .send() but cannot inject it into ordinary
+     * userland fnc/routine/lambda invocation or rt ownership operations.
+     */
+    private void rejectActorOrNamespaceParameter(Ast.TypeRef type, String where) {
+        if (type == null) return;
+        if (type.isBorrow()) {
+            rejectActorOrNamespaceParameter(type.borrowedTarget(), where);
+            return;
+        }
+        Ast.ClassDecl klass = findClass(type.name());
+        if (type.name().equals("ActorRef")
+                || type.name().equals("Actor")
+                || modules.contains(type.name())
+                || importedNamespaceValues.contains(type.name())
+                || (klass != null && klass.actorKind() != Ast.ActorKind.NONE)) {
+            throw error(where + " cannot accept actor, ActorRef, or module namespace values as parameters");
+        }
+        for (Ast.TypeRef arg : type.arguments()) {
+            rejectActorOrNamespaceParameter(arg, where);
+        }
+    }
+
+    private boolean isActorRefExpression(Ast.Expr expr, Scope scope) {
+        if (!(expr instanceof Ast.NameExpr name)) return false;
+        VarState state = scope.lookup(name.name());
+        return state != null
+                && state.type != null
+                && state.type.name().equals("ActorRef");
+    }
+
+    private void rejectNonFirstClassArgument(Ast.Expr expr, Scope scope, String where) {
+        if (expr instanceof Ast.SpreadExpr spread) {
+            rejectNonFirstClassArgument(spread.expression(), scope, where);
+        } else if (expr instanceof Ast.RuntimeCallExpr runtime) {
+            if (runtime.operation().equals("spawn")) {
+                throw error(where + " cannot pass an actor or ActorRef as a first-class value");
+            }
+            for (Ast.Expr arg : runtime.arguments()) {
+                rejectNonFirstClassArgument(arg, scope, where);
+            }
+        } else if (expr instanceof Ast.NameExpr name) {
+            VarState local = scope.lookup(name.name());
+            if (local == null && (modules.contains(name.name())
+                    || classes.containsKey(name.name())
+                    || importedNamespaceValues.contains(name.name()))) {
+                throw error(where + " cannot pass module or class namespace '" + name.name()
+                        + "'; use its static members");
+            }
+            if (local != null) rejectActorOrNamespaceParameter(local.type, where);
+        } else if (expr instanceof Ast.NewExpr created) {
+            Ast.ClassDecl klass = findClass(created.type().name());
+            if (klass != null && klass.actorKind() != Ast.ActorKind.NONE) {
+                throw error(where + " cannot pass an actor instance");
+            }
+        } else if (expr instanceof Ast.ListExpr list) {
+            for (Ast.Expr arg : list.elements()) {
+                rejectNonFirstClassArgument(arg, scope, where);
+            }
+        } else if (expr instanceof Ast.TupleExpr tuple) {
+            for (Ast.Expr arg : tuple.elements()) {
+                rejectNonFirstClassArgument(arg, scope, where);
+            }
+        } else if (expr instanceof Ast.ObjectExpr object) {
+            for (Ast.ObjectField field : object.fields()) {
+                rejectNonFirstClassArgument(field.value(), scope, where);
+            }
+        } else if (expr instanceof Ast.ConditionalExpr branch) {
+            rejectNonFirstClassArgument(branch.whenTrue(), scope, where);
+            rejectNonFirstClassArgument(branch.whenFalse(), scope, where);
+        }
+        // Dynamic member/host values are checked again at the evaluator's
+        // actual parameter-binding boundary to prevent aliasing via imports.
     }
 
     private ValueKind kindOfType(Ast.TypeRef type) {
