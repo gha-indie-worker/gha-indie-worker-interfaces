@@ -461,4 +461,105 @@ mod tests {
             Err("two guest stacks entered one shared actor"));
     }
 
+    #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+    struct ImmutableMailbox {
+        producer: u8,
+        frozen: Option<u8>,
+        delivered: [Option<u8>; 2],
+        private_copy: [Option<u8>; 2],
+    }
+
+    impl ImmutableMailbox {
+        fn initial() -> Self {
+            Self {
+                producer: 0,
+                frozen: None,
+                delivered: [None, None],
+                private_copy: [None, None],
+            }
+        }
+
+        fn invariant(&self) -> Result<(), &'static str> {
+            for i in 0..2 {
+                if let Some(view) = self.delivered[i] {
+                    if self.frozen != Some(view) {
+                        return Err("actor observed mutable alias after message publication");
+                    }
+                }
+                if self.private_copy[i].is_some() && self.delivered[i].is_none() {
+                    return Err("private copy exists without mailbox admission");
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn bounded_immutable_shared_snapshot_and_independent_copy_protocol() {
+        let initial = ImmutableMailbox::initial();
+        let mut visited = HashSet::from([initial.clone()]);
+        let mut queue = VecDeque::from([initial]);
+        let mut observed_parallel_delivery = false;
+        let mut observed_mutated_producer = false;
+        let mut observed_independent_copy = false;
+
+        while let Some(state) = queue.pop_front() {
+            state.invariant().unwrap();
+            observed_parallel_delivery |= state.delivered.iter().all(Option::is_some);
+            observed_mutated_producer |= state.frozen.is_some()
+                && state.producer != state.frozen.unwrap();
+            observed_independent_copy |= state.private_copy[0].is_some()
+                && state.private_copy[1].is_some()
+                && state.private_copy[0] != state.private_copy[1];
+            let mut next_states = Vec::new();
+            if state.frozen.is_none() {
+                let mut published = state.clone();
+                published.frozen = Some(state.producer);
+                next_states.push(published);
+            }
+            if state.frozen.is_some() {
+                let mut changed = state.clone();
+                changed.producer ^= 1;
+                next_states.push(changed);
+                for recipient in 0..2 {
+                    if state.delivered[recipient].is_none() {
+                        let mut delivered = state.clone();
+                        delivered.delivered[recipient] = state.frozen;
+                        next_states.push(delivered);
+                    } else {
+                        let mut copied = state.clone();
+                        if copied.private_copy[recipient].is_none() {
+                            copied.private_copy[recipient] = copied.delivered[recipient];
+                        } else {
+                            copied.private_copy[recipient] =
+                                copied.private_copy[recipient].map(|v| v ^ 1);
+                        }
+                        next_states.push(copied);
+                    }
+                }
+            }
+            for next in next_states {
+                next.invariant().unwrap();
+                if visited.insert(next.clone()) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        assert!(visited.len() > 20, "unexpectedly small state space");
+        assert!(observed_parallel_delivery);
+        assert!(observed_mutated_producer);
+        assert!(observed_independent_copy);
+        eprintln!("verified {} abstract immutable-publication states", visited.len());
+    }
+
+    #[test]
+    fn mutation_oracle_rejects_published_mutable_alias() {
+        let mut bad = ImmutableMailbox::initial();
+        bad.frozen = Some(0);
+        bad.producer = 1;
+        bad.delivered[0] = Some(bad.producer); // Incorrect: receiver followed writer alias.
+        assert_eq!(bad.invariant(),
+            Err("actor observed mutable alias after message publication"));
+    }
+
 }
