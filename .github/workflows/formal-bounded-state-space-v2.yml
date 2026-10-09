@@ -29,4 +29,4 @@ jobs:
       - name: Exact-source Oreslang scheduler and timer refinement
         run: |
           cd mirror/oreslang
-          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest,ActorNativeCarrierLeaseTest,ActorMailboxExecutionBoundaryTest,ActorCarrierIdentityCleanupTest test

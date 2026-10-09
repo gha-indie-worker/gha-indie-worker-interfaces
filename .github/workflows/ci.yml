@@ -40,7 +40,7 @@ jobs:
       - name: Compile and test exact-source Oreslang JVM mirror
         run: |
           cd mirror/oreslang
-          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest,ActorModuleStateOwnershipTest,ModuleFieldOwnershipTest,ActorConcurrentMailboxExecutionTest,ActorGroupMailmanTest,SourceActorSpawnExecutionTest,ActorCooperateOrderingTest,ActorSharedMailboxAccountingTest,ActorStructuredCancellationTest,SupervisorModuleGenerationTest,RtShareReadonlyProjectionTest,LinkedModuleContractEnforcementTest test
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest,ActorModuleStateOwnershipTest,ModuleFieldOwnershipTest,ActorConcurrentMailboxExecutionTest,ActorNativeCarrierLeaseTest,ActorMailboxExecutionBoundaryTest,ActorCarrierIdentityCleanupTest,ActorGroupMailmanTest,SourceActorSpawnExecutionTest,ActorCooperateOrderingTest,ActorSharedMailboxAccountingTest,ActorStructuredCancellationTest,SupervisorModuleGenerationTest,RtShareReadonlyProjectionTest,LinkedModuleContractEnforcementTest test
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

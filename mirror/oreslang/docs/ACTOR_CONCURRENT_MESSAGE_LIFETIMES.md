@@ -5,10 +5,27 @@ Status: DRAFT (PR #519); exact-head executed JVM verification required before me
 ## Model
 
 Actor concurrency is *maximum admitted unfinished receives*. It is **not**
-execution parallelism. Each actor has exactly one guest-code execution lease.
-Five messages may have their own in-flight stackless continuations, each waiting
-for I/O or channels, but at most one may execute guest code in any instant.
-Multiple actors may execute on different carriers concurrently.
+execution parallelism. Each SHARED, PRIVATE and UNTRUSTED actor has exactly one
+**native-thread execution lease** (an actor-local atomic CAS lock backed by
+`guestTurnOwner`). Five messages may have their own in-flight stackless
+continuations, each waiting for I/O or channels, but at most **one OS/native
+carrier thread may execute ANY actor code at any instant**. This includes
+compiled Oreslang, native/runtime-backed behavior callbacks, startup, on_start,
+resumed continuations, actor-local memory access and final guest cleanup.
+
+The native lease is acquired BEFORE installing actor ThreadLocal execution
+authority and released at turn completion. Each physical carrier may execute
+other actors once it has released the lease; it is **never pinned to an actor
+for the duration of an await**. A resumed handler may acquire the same actor
+lease on another carrier. The native Thread is the lease owner, not the
+message UUID/sequence. The ActorGroup Mailman has a separate CONTROL execution
+lease and may enqueue another actor's immutable mail but never call that
+actor's code directly.
+
+Supervisor stop/cancel must revoke future admission immediately, but cannot
+clear a live actor's active message payload/fields/owned memory from a foreign
+thread. Those resources retire after the executing native turn exits and the
+TurnExecutor/Truffle carrier boundary returns.
 
 ```oreslang
 define actor Worker as
@@ -80,7 +97,10 @@ limits.
 
 ## Verification
 
-Run `ActorConcurrentMailboxExecutionTest`, the pre-existing
+Run `ActorNativeCarrierLeaseTest`,
+`ActorMailboxExecutionBoundaryTest`,
+`ActorCarrierIdentityCleanupTest`,
+`ActorConcurrentMailboxExecutionTest`, the pre-existing
 `SourceActorSpawnExecutionTest` default-concurrency ordering regression,
 `ActorCooperateOrderingTest`, `ActorSharedMailboxAccountingTest`,
 `ActorContinuationCapacityTest`, `ActorStructuredCancellationTest`,

@@ -45,10 +45,12 @@ import java.util.function.UnaryOperator;
 /**
  * Host-side actor substrate used by the first interpreter.
  *
- * Oreslang actors multiplex multiple independent in-flight message lifetimes
- * over a single serialized guest-code lane. A suspended receive yields its
- * lane while other admitted messages may advance. Carrier identity is never
- * actor identity, and concurrency is not guest-code parallelism.
+ * Every SHARED, PRIVATE and UNTRUSTED actor has one exclusive native-carrier
+ * execution lease. The actor's code, host callback body, source continuation,
+ * startup and final guest cleanup run only while that lease is held.
+ * Multiple message lifetimes may be in-flight, but never more than one native
+ * thread executing an actor at a time. Await/cooperate releases the lease
+ * between turns: no carrier thread is pinned to a sleeping actor.
  *
  * PRIVATE and SHARED actors are deliberately bulkheaded onto different
  * dispatchers. Private actors also receive a confined logical memory slice;
@@ -145,6 +147,23 @@ public final class ActorRuntime implements AutoCloseable {
     public static Optional<ActorId> currentActorId() {
         ActorExecutionContext current = CURRENT_ACTOR_EXECUTION.get();
         return current == null ? Optional.empty() : Optional.of(current.actorId());
+    }
+
+    /**
+     * Host-side proof hook. A native carrier owns an actor's execution only
+     * from successfully admitted beginTurn() through endTurn(), including
+     * actor startup, mailbox callbacks, resumptions and guest final cleanup.
+     * Awaiting/suspended handlers retain message identity, NOT a native lock.
+     */
+    static boolean currentThreadOwnsActorNativeLease() {
+        ActorExecutionContext context = CURRENT_ACTOR_EXECUTION.get();
+        if (context == null) return false;
+        ActorCell<?> cell = context.runtime().currentActor.get();
+        return cell != null && cell.ref.ownedBy(context.runtime())
+                && context.actorId().equals(cell.ref.id())
+                && context.kind() == cell.kind
+                && cell.guestTurnOwner.get() == Thread.currentThread()
+                && cell.activeTurns == 1;
     }
 
     public static Object currentExecutionDomain() {
@@ -3038,6 +3057,19 @@ public final class ActorRuntime implements AutoCloseable {
             throw new SecurityException(
                     "actor cannot " + operation + " through another ActorRuntime");
         }
+        if (caller != null) {
+            ActorCell<?> cell = currentActor.get();
+            ActorExecutionContext execution = CURRENT_ACTOR_EXECUTION.get();
+            if (cell == null || execution == null
+                    || !execution.actorId().equals(cell.ref.id())
+                    || execution.kind() != cell.kind
+                    || cell.guestTurnOwner.get() != Thread.currentThread()
+                    || cell.activeTurns != 1) {
+                throw new SecurityException(
+                        "actor cannot " + operation
+                        + " without its exclusive native-thread execution lease");
+            }
+        }
         ActorGroupMailmanExecution mailman = CURRENT_ACTOR_GROUP_MAILMAN.get();
         if (mailman != null) {
             if (mailman.runtime() != this) {
@@ -5862,6 +5894,15 @@ public final class ActorRuntime implements AutoCloseable {
         private final Object lifecycleLock = new Object();
         private final Object executionDomain = new Object();
         private int activeTurns;
+        /**
+         * The actor's native-thread ownership lock (atomic CAS).
+         * Valid for startup, source/host mailbox work, continuation turns
+         * and guest final-cleanup alike, for every actor isolation kind.
+         *
+         * Never hold this across await or queued mailbox waiting. A different
+         * native carrier may acquire the next turn, but two carriers can
+         * never own this lease concurrently.
+         */
         private final AtomicReference<Thread> guestTurnOwner = new AtomicReference<>();
         private boolean carrierActive;
         /**
@@ -6054,7 +6095,8 @@ public final class ActorRuntime implements AutoCloseable {
                 Thread carrier = Thread.currentThread();
                 if (!guestTurnOwner.compareAndSet(null, carrier)) {
                     throw new IllegalStateException(
-                            "two carriers attempted actor guest execution for " + ref.id());
+                            "actor single-writer execution lease violation for " + ref.id()
+                                    + ": another native carrier owns actor execution");
                 }
                 activeTurns = 1;
                 return true;
@@ -6109,7 +6151,8 @@ public final class ActorRuntime implements AutoCloseable {
                 }
                 if (!guestTurnOwner.compareAndSet(Thread.currentThread(), null)) {
                     throw new IllegalStateException(
-                            "actor guest turn returned on a foreign carrier for " + ref.id());
+                            "actor native-thread execution lease released by a foreign carrier for "
+                                    + ref.id());
                 }
                 activeTurns = 0;
                 if (stopped.get()) finalizeStopLocked();
@@ -6380,15 +6423,16 @@ public final class ActorRuntime implements AutoCloseable {
 
         @SuppressWarnings("unchecked")
         private void runBatchEntered() {
-            currentActor.set(this);
-            CURRENT_ACTOR_EXECUTION.set(new ActorExecutionContext(
-                    ActorRuntime.this, ref.id(), kind, policy, executionDomain));
             boolean turnActive = false;
             try {
-                // Admission may throw on a single-writer lease violation.
-                // The carrier's actor identity must still be cleared.
+                // Acquire the actor's per-native-thread lock BEFORE installing
+                // actor authority on this carrier. Rejected or competing
+                // carriers must never impersonate the actor, even briefly.
                 turnActive = beginTurn();
                 if (!turnActive) return;
+                currentActor.set(this);
+                CURRENT_ACTOR_EXECUTION.set(new ActorExecutionContext(
+                        ActorRuntime.this, ref.id(), kind, policy, executionDomain));
 
                 if (kind == ActorKind.UNTRUSTED) {
                     turnStartedWallNanos = System.nanoTime();
@@ -6622,13 +6666,24 @@ public final class ActorRuntime implements AutoCloseable {
             })) {
                 // Drain all committed user-message envelopes, including after close.
             }
-            suspendedSourceMessages.clear();
-            sourceMessages.clear();
-            for (DeferredMailRelease pending : sourceMessageReleases.values()) {
-                pending.finish();
+            synchronized (lifecycleLock) {
+                // Cancellation may arrive from a supervisor/CONTROL carrier
+                // while a native actor turn is still executing. Revoke new
+                // admission and drain queued envelopes above, but DO NOT
+                // mutate or free the active actor's message state/leases from
+                // that foreign thread. The last TurnExecutor return invokes
+                // finalizeStopLocked() and completes this release.
+                if (activeTurns != 0 || carrierActive || guestTurnOwner.get() != null) {
+                    return;
+                }
+                suspendedSourceMessages.clear();
+                sourceMessages.clear();
+                for (DeferredMailRelease pending : sourceMessageReleases.values()) {
+                    pending.finish();
+                }
+                sourceMessageReleases.clear();
+                activeMail = null;
             }
-            sourceMessageReleases.clear();
-            activeMail = null;
         }
 
         private void fail(Throwable failure) {

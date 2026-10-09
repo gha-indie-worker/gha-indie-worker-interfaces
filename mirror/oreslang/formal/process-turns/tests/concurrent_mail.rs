@@ -19,6 +19,9 @@ struct Actor {
     lease: [bool; 3],
     outputs: [u8; 3],
     active: Option<usize>,
+    // Physical OS/native carrier identity, distinct from logical message ID.
+    // None while the actor awaits; can change on the next admitted turn.
+    native_carrier: Option<u8>,
     max_inflight: u8,
 }
 
@@ -29,6 +32,7 @@ impl Actor {
             lease: [false; 3],
             outputs: [0; 3],
             active: None,
+            native_carrier: None,
             max_inflight: limit,
         }
     }
@@ -48,6 +52,12 @@ impl Actor {
             .map(|(i, _)| i).collect();
         if running.len() > 1 || running.first().copied() != self.active {
             return Err("two guest message continuations executing simultaneously");
+        }
+        if self.native_carrier.is_some() != self.active.is_some() {
+            return Err("native carrier execution lease missing or leaked");
+        }
+        if self.native_carrier.is_some_and(|id| id > 1) {
+            return Err("invalid physical carrier ownership");
         }
         for i in 0..3 {
             if self.lease[i] != matches!(self.phase[i], Stage::Running | Stage::Suspended) {
@@ -69,12 +79,14 @@ impl Actor {
             let mut awaiting = self.clone();
             awaiting.phase[i] = Stage::Suspended;
             awaiting.active = None;
+            awaiting.native_carrier = None;
             successors.push(awaiting);
 
             let mut completed = self.clone();
             completed.phase[i] = Stage::Done;
             completed.lease[i] = false;
             completed.active = None;
+            completed.native_carrier = None;
             successors.push(completed);
 
             if self.outputs[i] < 2 {
@@ -87,18 +99,24 @@ impl Actor {
 
         for i in 0..3 {
             if self.phase[i] == Stage::Suspended {
-                let mut resumed = self.clone();
-                resumed.phase[i] = Stage::Running;
-                resumed.active = Some(i);
-                successors.push(resumed);
+                for native_carrier in 0..2 {
+                    let mut resumed = self.clone();
+                    resumed.phase[i] = Stage::Running;
+                    resumed.active = Some(i);
+                    resumed.native_carrier = Some(native_carrier);
+                    successors.push(resumed);
+                }
             }
             if self.phase[i] == Stage::Queued
                     && self.inflight() < self.max_inflight as usize {
-                let mut admitted = self.clone();
-                admitted.phase[i] = Stage::Running;
-                admitted.lease[i] = true;
-                admitted.active = Some(i);
-                successors.push(admitted);
+                for native_carrier in 0..2 {
+                    let mut admitted = self.clone();
+                    admitted.phase[i] = Stage::Running;
+                    admitted.lease[i] = true;
+                    admitted.active = Some(i);
+                    admitted.native_carrier = Some(native_carrier);
+                    successors.push(admitted);
+                }
             }
         }
         successors
@@ -152,8 +170,19 @@ fn mutation_oracle_detects_two_guest_turns() {
     invalid.lease[0] = true;
     invalid.lease[1] = true;
     invalid.active = Some(0);
+    invalid.native_carrier = Some(0);
     assert_eq!(invalid.validate(),
         Err("two guest message continuations executing simultaneously"));
+}
+
+#[test]
+fn mutation_oracle_rejects_running_actor_without_native_carrier_lease() {
+    let mut invalid = Actor::new(2);
+    invalid.phase[0] = Stage::Running;
+    invalid.lease[0] = true;
+    invalid.active = Some(0);
+    assert_eq!(invalid.validate(),
+        Err("native carrier execution lease missing or leaked"));
 }
 
 #[test]
