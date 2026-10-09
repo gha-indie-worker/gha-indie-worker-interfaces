@@ -259,9 +259,6 @@ public final class ActorRuntime implements AutoCloseable {
     public enum CarrierBackend { NATIVE_PTHREAD, JVM_THREAD_POOL }
 
     private static final String CARRIER_BACKEND_PROPERTY = "ores.runtime.carriers";
-    // Pool managers are created at VM startup; native per-lane carriers
-    // are not allocated until the first actor of that kind is scheduled.
-
 
     public record DispatcherConfig(
             int privateParallelism,
@@ -316,11 +313,8 @@ public final class ActorRuntime implements AutoCloseable {
      */
     public final class Shared<T> {
         private final AtomicBoolean sharedClosed = new AtomicBoolean();
-        // Value is frozen at publication and must never be rewritten by
-        // another thread, including during shutdown. Readers that entered
-        // before close may still finish using their immutable snapshot.
-        private final T value;
-        private final long reservedBytes;
+        private T value;
+        private long reservedBytes;
 
         private Shared(T value, long reservedBytes) {
             this.value = value;
@@ -339,7 +333,10 @@ public final class ActorRuntime implements AutoCloseable {
 
         private void closeFromRuntime() {
             if (!sharedClosed.compareAndSet(false, true)) return;
-            releaseSharedRuntimeBytes(reservedBytes);
+            long bytes = reservedBytes;
+            reservedBytes = 0L;
+            value = null;
+            releaseSharedRuntimeBytes(bytes);
             sharedValues.remove(this);
         }
     }
@@ -440,40 +437,6 @@ public final class ActorRuntime implements AutoCloseable {
         this.privateDispatcher = privatePool;
         this.sharedDispatcher = sharedPool;
         this.untrustedDispatcher = untrustedPool;
-    }
-
-    /** One physical carrier in each actor class, opt-in via --warm. */
-    public void warmActorPools() {
-        if (closed.get()) throw new RejectedExecutionException("actor runtime is closed");
-        for (ExecutorService pool : List.of(privateDispatcher, sharedDispatcher, untrustedDispatcher)) {
-            if (pool instanceof ActorAffinityDispatcher lanes) {
-                lanes.warmOne();
-            } else if (pool instanceof ThreadPoolExecutor javaPool) {
-                javaPool.prestartCoreThread();
-            } else if (pool instanceof NativeCarrierExecutor) {
-                // Non-affinity native carriers are already created by backend
-                // construction. Default lane affinity avoids eager allocation.
-            }
-        }
-    }
-
-    /** Lazily instantiated actor lanes by class, excluding CONTROL and ROOT. */
-    public Map<ActorKind, Integer> instantiatedActorLanes() {
-        return Map.of(
-                ActorKind.PRIVATE, instantiatedLanes(privateDispatcher),
-                ActorKind.SHARED, instantiatedLanes(sharedDispatcher),
-                ActorKind.UNTRUSTED, instantiatedLanes(untrustedDispatcher));
-    }
-
-    private static int instantiatedLanes(ExecutorService pool) {
-        if (pool instanceof ActorAffinityDispatcher lanes) {
-            return lanes.instantiatedLaneCount();
-        }
-        if (pool instanceof ThreadPoolExecutor javaPool) {
-            return javaPool.getPoolSize();
-        }
-        if (pool instanceof NativeCarrierExecutor) return 1;
-        return 0;
     }
 
     public IsolatePolicy policyCeiling() { return policyCeiling; }
@@ -1277,31 +1240,6 @@ public final class ActorRuntime implements AutoCloseable {
             return enqueueContinuation(actorId, continuation);
         }
     }
-
-    /**
-     * Resolve mutable imported-module state only inside this actor's admitted
-     * execution turn. The key includes the linked source unit and module name;
-     * no module state is installed in SharedCodeImageStore or any JVM singleton.
-     * The initializer must only allocate an empty state holder. Guest field
-     * initializers execute later on this actor's turn, never under a core lock.
-     */
-    public Object currentActorModuleState(
-            String codeUnitId, String moduleName, Supplier<Object> factory) {
-        Objects.requireNonNull(codeUnitId, "codeUnitId");
-        Objects.requireNonNull(moduleName, "moduleName");
-        Objects.requireNonNull(factory, "factory");
-        ActorCell<?> cell = currentActor.get();
-        if (cell == null || currentActorRuntime() != this
-                || cell.guestTurnOwner.get() != Thread.currentThread()) {
-            throw new SecurityException(
-                    "module state can only be accessed from its owning actor guest turn");
-        }
-        return cell.moduleStates.computeIfAbsent(
-                new ModuleStateKey(codeUnitId, moduleName),
-                ignored -> Objects.requireNonNull(factory.get(), "module state"));
-    }
-
-    private record ModuleStateKey(String codeUnitId, String moduleName) { }
 
     public ContinuationTarget captureCurrentContinuationTarget() {
         ActorCell<?> cell = currentActor.get();
@@ -5692,8 +5630,6 @@ public final class ActorRuntime implements AutoCloseable {
          */
         private final IdentityHashMap<Object, Long> staticSelectCursors =
                 new IdentityHashMap<>();
-        /** Actor-owned, linked-unit-qualified mutable module fields. */
-        private final Map<ModuleStateKey, Object> moduleStates = new LinkedHashMap<>();
         /** Settles only after the actor has fully crossed its TurnExecutor boundary. */
         private final OresFuture<Void> finalizedFuture = new OresFuture<>();
         /** Mailbox transport for ordinary user messages. */
@@ -5722,7 +5658,6 @@ public final class ActorRuntime implements AutoCloseable {
         private final Object lifecycleLock = new Object();
         private final Object executionDomain = new Object();
         private int activeTurns;
-        private final AtomicReference<Thread> guestTurnOwner = new AtomicReference<>();
         private boolean carrierActive;
         /**
          * Set when the currently executing actor envelope enqueues a source
@@ -5898,11 +5833,6 @@ public final class ActorRuntime implements AutoCloseable {
                             "actor single-writer execution lease violation for " + ref.id()
                                     + ": activeTurns=" + activeTurns);
                 }
-                Thread carrier = Thread.currentThread();
-                if (!guestTurnOwner.compareAndSet(null, carrier)) {
-                    throw new IllegalStateException(
-                            "two carriers attempted actor guest execution for " + ref.id());
-                }
                 activeTurns = 1;
                 return true;
             }
@@ -5954,10 +5884,6 @@ public final class ActorRuntime implements AutoCloseable {
                             "actor execution lease accounting violation for " + ref.id()
                                     + ": activeTurns=" + activeTurns);
                 }
-                if (!guestTurnOwner.compareAndSet(Thread.currentThread(), null)) {
-                    throw new IllegalStateException(
-                            "actor guest turn returned on a foreign carrier for " + ref.id());
-                }
                 activeTurns = 0;
                 if (stopped.get()) finalizeStopLocked();
                 lifecycleLock.notifyAll();
@@ -5986,7 +5912,6 @@ public final class ActorRuntime implements AutoCloseable {
             }
             drainMailboxReservations();
             staticSelectCursors.clear();
-            moduleStates.clear();
             codeActorState = null;
             Throwable terminalOutput = ref.terminationCause.get();
             outputStream.close(terminalOutput);

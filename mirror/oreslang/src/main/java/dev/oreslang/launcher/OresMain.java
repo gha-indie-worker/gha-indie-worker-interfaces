@@ -39,7 +39,6 @@ public final class OresMain {
             return;
         }
         boolean strict = false;
-        boolean warm = false;
         boolean checkOnly = false;
         boolean buildAnalysis = false;
         List<String> buildDefines = new ArrayList<>();
@@ -57,7 +56,6 @@ public final class OresMain {
         for (String arg : args) {
             if (arg.equals("--strict-isolate")) strict = true;
             else if (arg.equals("--check")) checkOnly = true;
-            else if (arg.equals("--warm")) warm = true;
             else if (arg.equals("--build-analysis")) buildAnalysis = true;
             else if (arg.equals("--no-prompt")) {
                 // Oreslang permissions never prompt. This Deno-compatible
@@ -204,8 +202,7 @@ public final class OresMain {
                 allowedHostClasses,
                 System.getenv(),
                 System.out,
-                System.err,
-                warm);
+                System.err);
     }
 
     private static boolean parsePermissionFlag(
@@ -264,7 +261,7 @@ public final class OresMain {
                         + "[--allow-ffi[=PATH,...]] [--deny-ffi[=PATH,...]] "
                         + "[--allow-import[=PATH,...]] [--deny-import[=PATH,...]] "
                         + "[--no-prompt] [--define=name=value ...] [--entry=symbol ...] "
-                        + "[--strict-isolate] [--warm] [--mode=aot|jit|hybrid] "
+                        + "[--strict-isolate] [--mode=aot|jit|hybrid] "
                         + "[--platform=server|windows|macos|linux|android|ios] "
                         + "[--allow=CAP,...] [--allow-host-class=java.util.ArrayList ...] "
                         + "[file.ores|file.java]");

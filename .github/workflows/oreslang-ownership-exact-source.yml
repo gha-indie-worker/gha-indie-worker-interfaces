@@ -1,0 +1,26 @@
+name: Oreslang ownership exact-source JVM mirror
+
+on:
+  push:
+    branches: [test/oreslang-ownership-structural-20261009]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: mirror/oreslang/pom.xml
+      - name: Verify exact Oreslang source ownership regression
+        run: mvn -B -ntp -f mirror/oreslang/pom.xml -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=PointerlessFncOwnershipTest test

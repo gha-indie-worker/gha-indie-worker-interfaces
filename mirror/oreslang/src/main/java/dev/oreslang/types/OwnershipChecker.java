@@ -2,7 +2,6 @@ package dev.oreslang.types;
 
 import dev.oreslang.ast.AnnotationExpander;
 import dev.oreslang.ast.Ast;
-import dev.oreslang.imports.ImportRules;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,12 +37,6 @@ public final class OwnershipChecker {
     private final Map<String, Ast.FunctionDecl> functions = new HashMap<>();
     private final Map<String, Ast.ClassDecl> classes = new HashMap<>();
     private final Set<String> modules = new HashSet<>();
-    /** Local module declarations permit precise write checks; imported module
-     * writes remain fail-closed without a linked field contract. */
-    private final Map<String, Ast.ModuleDecl> moduleDeclarations = new HashMap<>();
-    private final Set<String> importedNamespaceValues = new HashSet<>();
-    private final Set<String> importedActorTypes = new HashSet<>();
-    private final Set<String> importedModuleTypes = new HashSet<>();
     private final Set<String> ambiguousFunctions = new HashSet<>();
     private final Set<String> ambiguousClasses = new HashSet<>();
     private int mutexCriticalSectionDepth;
@@ -61,27 +54,8 @@ public final class OwnershipChecker {
     }
 
     private void index(Ast.Program program) {
-        for (Ast.ImportDecl imported : program.imports()) {
-            if (imported.wildcard()) {
-                if (imported.namespace() != null
-                        && !imported.namespace().isBlank()) {
-                    importedNamespaceValues.add(imported.namespace());
-                }
-            } else if (imported.kind() == Ast.ImportKind.MODULE
-                    || imported.kind() == Ast.ImportKind.CLASS
-                    || imported.kind() == Ast.ImportKind.ACTOR
-                    || imported.kind() == Ast.ImportKind.ALL) {
-                for (String name : imported.names()) {
-                    String localName = ImportRules.localName(imported, name);
-                    importedNamespaceValues.add(localName);
-                    if (imported.kind() == Ast.ImportKind.ACTOR) importedActorTypes.add(localName);
-                    if (imported.kind() == Ast.ImportKind.MODULE) importedModuleTypes.add(localName);
-                }
-            }
-        }
         for (Ast.ModuleDecl module : program.modules()) {
             modules.add(module.name());
-            moduleDeclarations.put(module.name(), module);
             for (Ast.Decl decl : module.declarations()) {
                 if (decl instanceof Ast.FunctionDecl fn) index(functions, ambiguousFunctions, module.name(), fn.name(), fn);
                 else if (decl instanceof Ast.ClassDecl klass) index(classes, ambiguousClasses, module.name(), klass.name(), klass);
@@ -108,9 +82,6 @@ public final class OwnershipChecker {
     }
 
     private void checkFunction(Ast.FunctionDecl fn) {
-        for (Ast.Param param : fn.parameters()) {
-            rejectActorOrNamespaceParameter(param.type(), "function " + fn.name());
-        }
         Scope scope = new Scope(null, fn.nonLexical());
         for (Ast.Param param : fn.parameters()) {
             scope.define(param.name(), stateForParam(param));
@@ -139,9 +110,6 @@ public final class OwnershipChecker {
 
         if (klass.constructor() != null) {
             Ast.ConstructorDecl constructor = klass.constructor();
-            for (Ast.Param param : constructor.parameters()) {
-                rejectActorOrNamespaceParameter(param.type(), "constructor " + klass.name());
-            }
             Scope scope = new Scope(null);
             scope.define("self", new VarState(
                     Ast.TypeRef.borrowed(Ast.TypeRef.simple(klass.name()), true),
@@ -162,9 +130,6 @@ public final class OwnershipChecker {
         }
 
         for (Ast.MethodDecl method : klass.methods()) {
-            for (Ast.Param param : method.parameters()) {
-                rejectActorOrNamespaceParameter(param.type(), "method " + klass.name() + "." + method.name());
-            }
             Scope scope = new Scope(null);
             if (!method.isStatic()) {
                 if (klass.actorKind() != Ast.ActorKind.NONE) {
@@ -727,15 +692,7 @@ public final class OwnershipChecker {
                         ValueKind.MOVE_ONLY,
                         null);
             }
-            if (state == null) {
-                if (consuming && (modules.contains(name.name())
-                        || classes.containsKey(name.name())
-                        || importedNamespaceValues.contains(name.name()))) {
-                    throw error("module, class and actor namespaces are not values; "
-                            + "call their static members instead of moving '" + name.name() + "'");
-                }
-                return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.COPY, null);
-            } // function and ambient symbols are separately resolved
+            if (state == null) return new ValueInfo(Ast.TypeRef.inferred(), ValueKind.COPY, null); // function/module/global
             state.debugName = name.name();
             requireUsable(state, name.name(), false);
             if (consuming && isActorConfinedBorrow(state)) {
@@ -792,7 +749,6 @@ public final class OwnershipChecker {
                 throw error("rt " + runtime.operation() + " expects exactly one argument");
             }
             Ast.Expr argument = runtime.arguments().getFirst();
-            rejectNonFirstClassArgument(argument, scope, "rt " + runtime.operation());
             return switch (runtime.operation()) {
                 case "borrow" -> {
                     VarState owner = borrowOwner(argument, scope);
@@ -819,15 +775,12 @@ public final class OwnershipChecker {
                 }
                 case "copy" -> {
                     ValueInfo source = checkExpr(argument, scope, false);
-                    if (!isDeepCopyableType(source.type, new HashSet<>())) {
-                        throw error("rt copy requires a statically known owned data graph "
-                                + "(scalars, arrays, tuples, records or non-actor classes); "
-                                + "borrows, actors, executable values and core capabilities are not copyable");
+                    if (source.kind != ValueKind.COPY) {
+                        throw error(
+                                "rt copy of move-only values requires the Symbol.rtCopy copy-contract lowering; "
+                                        + "this current-main convergence patch fails closed instead of aliasing");
                     }
-                    // A mutable copy is an independently owned object. The
-                    // original is not consumed; no writable aliases survive.
-                    yield new ValueInfo(source.type, source.kind == ValueKind.COPY
-                            ? ValueKind.COPY : ValueKind.MOVE_ONLY, null);
+                    yield source;
                 }
                 case "share" -> {
                     ValueInfo source = checkExpr(argument, scope, false);
@@ -984,9 +937,7 @@ public final class OwnershipChecker {
         if (expr instanceof Ast.NewExpr created) {
             List<Ast.TypeRef> argumentTypes = new ArrayList<>(created.arguments().size());
             for (Ast.Expr arg : created.arguments()) {
-                rejectNonFirstClassArgument(arg, scope, "constructor " + created.type().name());
                 ValueInfo info = checkExpr(arg, scope, true);
-                rejectActorOrNamespaceParameter(info.type, "constructor " + created.type().name());
                 if (containsMutexGuardType(info.type)) {
                     throw error("MutexGuard cannot be stored in a constructed object");
                 }
@@ -1108,16 +1059,6 @@ public final class OwnershipChecker {
     }
 
     private ValueInfo checkCall(Ast.CallExpr call, Scope scope) {
-        // ActorRef.send(...) is a dedicated mailbox primitive rather than a
-        // userland function that takes an actor as a first-class argument.
-        boolean mailboxSend = call.callee() instanceof Ast.MemberExpr method
-                && method.member().equals("send")
-                && isActorRefExpression(method.receiver(), scope);
-        if (!mailboxSend) {
-            for (Ast.Expr arg : call.arguments()) {
-                rejectNonFirstClassArgument(arg, scope, "callable argument");
-            }
-        }
         if (isBooleanIntrinsicCall(call, scope)) {
             for (Ast.Expr argument : call.arguments()) {
                 checkExpr(argument, scope, false);
@@ -1532,6 +1473,8 @@ public final class OwnershipChecker {
     }
 
     private void checkArguments(List<Ast.Expr> arguments, List<Ast.Param> params, Scope scope, String callable) {
+        ArrayList<CallLoan> callLoans = new ArrayList<>();
+        try {
         int parameterIndex = 0;
         for (Ast.Expr argument : arguments) {
             if (argument instanceof Ast.SpreadExpr spread) {
@@ -1563,8 +1506,55 @@ public final class OwnershipChecker {
             }
 
             if (parameterIndex >= params.size()) return; // TypeChecker reports arity.
-            checkArgument(argument, params.get(parameterIndex), scope, callable, parameterIndex + 1);
+            Ast.Param param = params.get(parameterIndex);
+            checkArgument(argument, param, scope, callable, parameterIndex + 1);
+            reserveCallLoan(argument, param, scope, callLoans);
             parameterIndex++;
+        }
+        } finally {
+            for (int i = callLoans.size() - 1; i >= 0; i--) {
+                CallLoan loan = callLoans.get(i);
+                if (loan.mutable()) loan.state().mutableBorrowed = false;
+                else loan.state().immutableBorrows--;
+            }
+        }
+    }
+
+    private record CallLoan(VarState state, boolean mutable) {}
+
+    /** Reserve direct argument borrows through the entire call argument list. */
+    private void reserveCallLoan(Ast.Expr argument, Ast.Param param, Scope scope, List<CallLoan> loans) {
+        boolean structural = param.structural() && !param.type().isBorrow();
+        if (!structural && !param.type().isBorrow()) return;
+        Ast.Expr source = null;
+        if (argument instanceof Ast.NameExpr) {
+            source = argument;
+        } else if (argument instanceof Ast.RuntimeCallExpr runtime
+                && runtime.operation().equals("borrow") && runtime.arguments().size() == 1) {
+            source = runtime.arguments().getFirst();
+        } else if (argument instanceof Ast.UnaryExpr unary
+                && (unary.operator().equals("&") || unary.operator().equals("&mut"))) {
+            source = unary.operand();
+        }
+        if (source == null) return; // Temporary expression; no caller-owned named root.
+        VarState owner = borrowOwner(source, scope);
+        boolean mutable = param.type().isBorrow() && param.type().mutableBorrow();
+        if (owner.kind == ValueKind.IMM_BORROW || owner.kind == ValueKind.MUT_BORROW || owner.type.isBorrow()) {
+            // The borrowed view already holds its source's lease; track call
+            // conflicts locally without reacquiring that exclusive source lease.
+            if (mutable && owner.kind != ValueKind.MUT_BORROW
+                    && !(owner.type.isBorrow() && owner.type.mutableBorrow())) {
+                throw error("mutable call loan requires an exclusive borrowed view");
+            }
+            if (owner.mutableBorrowed || (mutable && owner.immutableBorrows > 0)) {
+                throw error("cannot overlap call loans for borrowed value '" + owner.debugName + "'");
+            }
+            if (mutable) owner.mutableBorrowed = true;
+            else owner.immutableBorrows++;
+            loans.add(new CallLoan(owner, mutable));
+        } else {
+            beginPersistentBorrow(owner, mutable);
+            loans.add(new CallLoan(ownershipRoot(owner), mutable));
         }
     }
 
@@ -1574,13 +1564,19 @@ public final class OwnershipChecker {
             Scope scope,
             String callable,
             int position) {
-        rejectNonFirstClassArgument(arg, scope, callable + " argument " + position);
-        rejectActorOrNamespaceParameter(param.type(), callable);
         if (arg instanceof Ast.RuntimeCallExpr runtime && runtime.operation().equals("borrow")
                 && runtime.arguments().size() == 1) {
             arg = new Ast.UnaryExpr("&", runtime.arguments().getFirst());
         }
         if (param.structural() && !param.type().isBorrow()) {
+            if (arg instanceof Ast.RuntimeCallExpr runtime && runtime.operation().equals("take")) {
+                throw error(callable + " argument " + position
+                        + " is a read-only structural view; rt take would transfer ownership");
+            }
+            if (arg instanceof Ast.UnaryExpr unary && unary.operator().equals("&mut")) {
+                throw error(callable + " argument " + position
+                        + " is a read-only structural view; rt borrow mut is not permitted");
+            }
             ValueInfo argument = checkExpr(arg, scope, false);
             if (containsMutexGuardType(argument.type)
                     || (mutexCriticalSectionDepth > 0 && argument.type.isBorrow())) {
@@ -1619,7 +1615,10 @@ public final class OwnershipChecker {
             throw error(callable + " argument " + position + " must be an explicit borrow");
         }
         ValueInfo argument = checkExpr(arg, scope, true);
-        rejectActorOrNamespaceParameter(argument.type, callable + " argument " + position);
+        if (isBorrowValue(argument)) {
+            throw error(callable + " argument " + position
+                    + " is owned by-value; a borrowed view cannot transfer ownership");
+        }
         if (containsMutexGuardType(argument.type)) {
             throw error(callable + " argument " + position + " cannot consume a guard-bearing value");
         }
@@ -1634,28 +1633,6 @@ public final class OwnershipChecker {
             return;
         }
         if (target instanceof Ast.MemberExpr member) {
-            if (member.receiver() instanceof Ast.NameExpr name
-                    && scope.lookup(name.name()) == null
-                    && moduleDeclarations.containsKey(name.name())) {
-                Ast.ModuleDecl module = moduleDeclarations.get(name.name());
-                Ast.FieldDecl field = null;
-                for (Ast.Decl declaration : module.declarations()) {
-                    if (declaration instanceof Ast.FieldDecl candidate
-                            && candidate.name().equals(member.member())) {
-                        field = candidate;
-                        break;
-                    }
-                }
-                if (field == null || field.visibility() != Ast.Visibility.PUBLIC) {
-                    throw error("module '" + module.name()
-                            + "' has no public mutable field '" + member.member() + "'");
-                }
-                if (field.bindingKind() != Ast.BindingKind.LET) {
-                    throw error("module field '" + module.name() + "." + member.member()
-                            + "' is immutable");
-                }
-                return; // module namespace is not an ordinary mutable value
-            }
             Ast.ClassDecl klass = classOfReceiver(member.receiver(), scope);
             if (klass != null) {
                 Ast.FieldDecl field = findField(klass, member.member(), new LinkedHashSet<>());
@@ -2998,138 +2975,10 @@ public final class OwnershipChecker {
         return Ast.TypeRef.union(List.of(left, right));
     }
 
-    /**
-     * Actors and namespace objects are code/control identities, never data
-     * parameters. ActorRef is a routing capability, not a transferable actor
-     * object: callers may use .send() but cannot inject it into ordinary
-     * userland fnc/routine/lambda invocation or rt ownership operations.
-     */
-    private void rejectActorOrNamespaceParameter(Ast.TypeRef type, String where) {
-        if (type == null) return;
-        if (type.isBorrow()) {
-            rejectActorOrNamespaceParameter(type.borrowedTarget(), where);
-            return;
-        }
-        Ast.ClassDecl klass = findClass(type.name());
-        if (type.name().equals("ActorRef")
-                || type.name().equals("Actor")
-                || modules.contains(type.name())
-                || importedModuleTypes.contains(type.name())
-                || importedActorTypes.contains(type.name())
-                || (klass != null && klass.actorKind() != Ast.ActorKind.NONE)) {
-            throw error(where + " cannot accept actor, ActorRef, or module namespace values as parameters");
-        }
-        for (Ast.TypeRef arg : type.arguments()) {
-            rejectActorOrNamespaceParameter(arg, where);
-        }
-    }
-
-    private boolean isActorRefExpression(Ast.Expr expr, Scope scope) {
-        if (!(expr instanceof Ast.NameExpr name)) return false;
-        VarState state = scope.lookup(name.name());
-        return state != null
-                && state.type != null
-                && state.type.name().equals("ActorRef");
-    }
-
-    private void rejectNonFirstClassArgument(Ast.Expr expr, Scope scope, String where) {
-        if (expr instanceof Ast.SpreadExpr spread) {
-            rejectNonFirstClassArgument(spread.expression(), scope, where);
-        } else if (expr instanceof Ast.RuntimeCallExpr runtime) {
-            if (runtime.operation().equals("spawn")) {
-                throw error(where + " cannot pass an actor or ActorRef as a first-class value");
-            }
-            for (Ast.Expr arg : runtime.arguments()) {
-                rejectNonFirstClassArgument(arg, scope, where);
-            }
-        } else if (expr instanceof Ast.NameExpr name) {
-            VarState local = scope.lookup(name.name());
-            if (local == null && (modules.contains(name.name())
-                    || classes.containsKey(name.name())
-                    || importedNamespaceValues.contains(name.name()))) {
-                throw error(where + " cannot pass module or class namespace '" + name.name()
-                        + "'; use its static members");
-            }
-            if (local != null) rejectActorOrNamespaceParameter(local.type, where);
-        } else if (expr instanceof Ast.NewExpr created) {
-            Ast.ClassDecl klass = findClass(created.type().name());
-            if (klass != null && klass.actorKind() != Ast.ActorKind.NONE) {
-                throw error(where + " cannot pass an actor instance");
-            }
-        } else if (expr instanceof Ast.ListExpr list) {
-            for (Ast.Expr arg : list.elements()) {
-                rejectNonFirstClassArgument(arg, scope, where);
-            }
-        } else if (expr instanceof Ast.TupleExpr tuple) {
-            for (Ast.Expr arg : tuple.elements()) {
-                rejectNonFirstClassArgument(arg, scope, where);
-            }
-        } else if (expr instanceof Ast.ObjectExpr object) {
-            for (Ast.ObjectField field : object.fields()) {
-                rejectNonFirstClassArgument(field.value(), scope, where);
-            }
-        } else if (expr instanceof Ast.ConditionalExpr branch) {
-            rejectNonFirstClassArgument(branch.whenTrue(), scope, where);
-            rejectNonFirstClassArgument(branch.whenFalse(), scope, where);
-        }
-        // Dynamic member/host values are checked again at the evaluator's
-        // actual parameter-binding boundary to prevent aliasing via imports.
-    }
-
     private ValueKind kindOfType(Ast.TypeRef type) {
         if (type == null) return ValueKind.MOVE_ONLY;
         if (type.isBorrow()) return type.mutableBorrow() ? ValueKind.MUT_BORROW : ValueKind.IMM_BORROW;
         return isCopyType(type) ? ValueKind.COPY : ValueKind.MOVE_ONLY;
-    }
-
-    /**
-     * Static permission to deep-copy ordinary actor-owned data. This does
-     * not grant Copy (implicit aliasing): runtime rt copy must allocate a
-     * separate mutable graph. Unknown/imported host objects fail closed.
-     */
-    private boolean isDeepCopyableType(Ast.TypeRef type, Set<String> visitingClasses) {
-        if (type == null || type.isBorrow() || type.name().equals("$infer$")) return false;
-        if (type.isUnion() || type.isTupleType()) {
-            return type.arguments().stream().allMatch(t -> isDeepCopyableType(t, visitingClasses));
-        }
-        if (type.isRecordType()) {
-            return type.recordMembers().values().stream()
-                    .allMatch(t -> isDeepCopyableType(t, visitingClasses));
-        }
-        if (switch (type.name()) {
-            case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
-                    "f32","f64","float","decimal","complex64","complex128","complex",
-                    "bool","Bool","string","String","void" -> true;
-            default -> false;
-        }) return true;
-        if (type.name().equals("Array") || type.name().equals("List")
-                || type.name().equals("Vector") || type.name().equals("Slice")
-                || type.name().equals("Option")) {
-            return type.arguments().size() == 1
-                    && isDeepCopyableType(type.arguments().getFirst(), visitingClasses);
-        }
-        if (type.name().equals("Result")) {
-            return type.arguments().size() == 2
-                    && type.arguments().stream().allMatch(t -> isDeepCopyableType(t, visitingClasses));
-        }
-        Ast.ClassDecl klass = findClass(type.name());
-        if (klass == null || klass.actorKind() != Ast.ActorKind.NONE) return false;
-        // Generic substitution and recursive nominal graphs need a dedicated
-        // clone-contract elaboration. A shallow type name match isn't proof
-        // that inherited fields are safe to duplicate.
-        if (!klass.genericParameters().isEmpty() || !type.arguments().isEmpty()) return false;
-        if (!visitingClasses.add(klass.name())) return false;
-        try {
-            for (Ast.TypeRef parent : klass.parents()) {
-                if (!isDeepCopyableType(parent, visitingClasses)) return false;
-            }
-            for (Ast.FieldDecl field : klass.fields()) {
-                if (!isDeepCopyableType(ownershipFieldType(field), visitingClasses)) return false;
-            }
-            return true;
-        } finally {
-            visitingClasses.remove(klass.name());
-        }
     }
 
     private boolean isCopyType(Ast.TypeRef type) {

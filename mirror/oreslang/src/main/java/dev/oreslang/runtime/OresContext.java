@@ -12,7 +12,6 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -111,9 +110,6 @@ public final class OresContext implements AutoCloseable {
             async = new AsyncRuntime(this::executeAsyncTurn);
             gc = new RuntimeGarbageCollector();
             actors.setActorExitHook(gc::retireActorDomain);
-            if (java.util.Arrays.asList(env.getApplicationArguments()).contains("--warm")) {
-                actors.warmActorPools();
-            }
 
             this.vm = vm;
             this.actors = actors;
@@ -292,8 +288,6 @@ public final class OresContext implements AutoCloseable {
                 return main.call();
             } catch (Exception failure) {
                 throw new IllegalStateException("root main failed", failure);
-            } finally {
-                vm.finishRootMain();
             }
         }
 
@@ -308,13 +302,7 @@ public final class OresContext implements AutoCloseable {
                         throw new IllegalStateException(
                                 "root main task must begin with an initial resume");
                     }
-                    Object result;
-                    try {
-                        result = main.call();
-                    } catch (Exception | Error failure) {
-                        vm.finishRootMain();
-                        throw failure;
-                    }
+                    Object result = main.call();
                     if (result instanceof OresFuture<?> future) {
                         pc = 1;
                         return OresScheduler.await(future);
@@ -323,67 +311,26 @@ public final class OresContext implements AutoCloseable {
                         pc = 1;
                         return OresScheduler.await(OresFuture.from(stage));
                     }
-                    // Close timers BEFORE the main turn retires, so no
-                    // queued callback can outrun host-side Future settlement.
-                    vm.finishRootMain();
                     return OresScheduler.done(result);
                 }
 
                 if (pc == 1) {
-                    try {
-                        if (resume.failure() != null) {
-                            Throwable failure = OresFuture.unwrap(resume.failure());
-                            if (failure instanceof Exception checked) throw checked;
-                            if (failure instanceof Error error) throw error;
-                            throw new RuntimeException(failure);
-                        }
-                        @SuppressWarnings("unchecked")
-                        Object value = resume.value();
-                        pc = 2;
-                        return OresScheduler.done(value);
-                    } finally {
-                        // Close timers while still holding main's guest turn.
-                        vm.finishRootMain();
+                    if (resume.failure() != null) {
+                        Throwable failure = OresFuture.unwrap(resume.failure());
+                        if (failure instanceof Exception checked) throw checked;
+                        if (failure instanceof Error error) throw error;
+                        throw new RuntimeException(failure);
                     }
+                    @SuppressWarnings("unchecked")
+                    Object value = resume.value();
+                    pc = 2;
+                    return OresScheduler.done(value);
                 }
 
                 throw new IllegalStateException(
                         "root main scheduler task resumed after terminal state");
             }
         });
-        try {
-            return awaitHostRootTask(task);
-        } finally {
-            // Returning main is a process-lifetime boundary. A plain timer
-            // registration is NOT an implicit keepalive reference.
-            vm.finishRootMain();
-        }
-    }
-
-    /**
-     * Run synchronous guest code from a host/Truffle entry point (module init,
-     * public export invocation) on the SAME ROOT process lane as main/async.
-     * Unlike runRootMain, the return value is not implicitly awaited/flattened.
-     */
-    public Object runRootGuestCall(Callable<?> guestCall) {
-        java.util.Objects.requireNonNull(guestCall, "guestCall");
-        if (vm.isRootSchedulerCurrent()) {
-            try {
-                return guestCall.call();
-            } catch (Exception failure) {
-                throw new IllegalStateException("root guest call failed", failure);
-            }
-        }
-        if (ActorRuntime.inActorExecution() || OresScheduler.current() != null) {
-            throw new IllegalStateException(
-                    "cross-process synchronous ROOT guest call is not allowed; "
-                            + "send a message or schedule an async continuation");
-        }
-        OresFuture<Object> task = vm.rootScheduler().startSync(guestCall::call);
-        return awaitHostRootTask(task);
-    }
-
-    private Object awaitHostRootTask(OresFuture<?> task) {
         if (isolatedRootTurns != null) {
             while (!task.isDone()) {
                 Runnable turn = isolatedRootTurns.poll();
@@ -406,28 +353,6 @@ public final class OresContext implements AutoCloseable {
         return task.join();
     }
 
-    /**
-     * Fail closed for interpreter function evaluation outside an actor,
-     * mailman or VM-owned ROOT/supervisor user-code turn. Runtime bookkeeping,
-     * foreign Future/timer completions and JNI callbacks do not qualify.
-     */
-    public void requireGuestExecutionTurn() {
-        if (ActorRuntime.inActorExecution()) {
-            if (ActorRuntime.currentActorRuntime() != actors) {
-                throw new SecurityException("guest actor belongs to another OresContext");
-            }
-            return;
-        }
-        if (ActorRuntime.inActorGroupMailmanExecution()) {
-            if (vm.isControlSchedulerCurrent()) return;
-            throw new SecurityException("guest mailman callback is off CONTROL lane");
-        }
-        if (!vm.isGuestProcessSchedulerCurrent()) {
-            throw new SecurityException(
-                    "guest function execution requires its owning process lane");
-        }
-    }
-
     private void executeRootTurn(Runnable turn) {
         executeGuestTurn(turn, isolatePolicy.adversarial());
     }
@@ -437,16 +362,16 @@ public final class OresContext implements AutoCloseable {
     }
 
     private void executeAsyncTurn(Runnable turn) {
-        Objects.requireNonNull(turn, "turn");
-        // Legacy GeneratorRuntime produces guest code on a virtual thread and
-        // parks its Java stack while waiting for the consumer. A ROOT lane lock
-        // held through that wait deadlocks; running outside the lane violates
-        // the one-stack-per-process invariant. Until source generators are
-        // continuation-lowered, reject this bridge in ALL profiles.
-        // Native/runtime I/O completion threads remain unaffected.
-        throw new SecurityException(
-                "legacy async/generator guest execution is not single-flight; "
-                        + "compiler continuation lowering is required");
+        // The current interpreter executes an async callable as one virtual-
+        // thread task. Holding the adversarial actor serialization lock across
+        // an await could deadlock a nested async task, so strict/adversarial
+        // profiles fail closed until compiler continuation lowering can release
+        // the guest turn at each await suspension point.
+        if (isolatePolicy.adversarial()) {
+            throw new SecurityException(
+                    "async callable execution in adversarial contexts requires continuation lowering");
+        }
+        executeGuestTurn(turn, false);
     }
 
     private void executeGuestTurn(Runnable turn, boolean serialize) {

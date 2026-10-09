@@ -6,7 +6,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
@@ -96,8 +95,6 @@ public final class OresScheduler implements AutoCloseable {
     private final Executor executor;
     private final ExecutorService ownedExecutor;
     private final TurnExecutor turnExecutor;
-    private final ProcessTurnTrace turnTrace;
-    private final CopyOnWriteArrayList<Runnable> closeHooks = new CopyOnWriteArrayList<>();
     private final Set<TaskRunner<?>> tasks = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -127,7 +124,6 @@ public final class OresScheduler implements AutoCloseable {
         this.name = "ores-user-scheduler-" + NEXT_ID.incrementAndGet();
         this.parallelism = parallelism;
         this.turnExecutor = Objects.requireNonNull(turnExecutor, "turnExecutor");
-        this.turnTrace = new ProcessTurnTrace(name, parallelism == 1);
 
         AtomicInteger carrierId = new AtomicInteger();
         ThreadFactory factory = task -> Thread.ofPlatform()
@@ -168,7 +164,6 @@ public final class OresScheduler implements AutoCloseable {
         this.executor = Objects.requireNonNull(executor, "executor");
         this.ownedExecutor = ownedExecutor;
         this.turnExecutor = Objects.requireNonNull(turnExecutor, "turnExecutor");
-        this.turnTrace = new ProcessTurnTrace(name, parallelism == 1);
     }
 
     /**
@@ -236,11 +231,6 @@ public final class OresScheduler implements AutoCloseable {
     }
 
     /** Scheduler currently executing this Ores task turn, if any. */
-    /** Snapshot real admitted guest turns for finite-model trace refinement. */
-    public ProcessTurnTrace.Snapshot turnTrace() {
-        return turnTrace.snapshot();
-    }
-
     public static OresScheduler current() {
         return CURRENT.get();
     }
@@ -337,15 +327,9 @@ public final class OresScheduler implements AutoCloseable {
         Long priorDispatch = CURRENT_DISPATCH_ID.get();
         CURRENT.set(this);
         CURRENT_DISPATCH_ID.set(NEXT_DISPATCH_ID.incrementAndGet());
-        boolean entered = false;
         try {
-            turnTrace.enter(currentDispatchId(), Thread.currentThread().threadId());
-            entered = true;
             turn.run();
         } finally {
-            if (entered) {
-                turnTrace.exit(currentDispatchId(), Thread.currentThread().threadId());
-            }
             if (priorDispatch == null) {
                 CURRENT_DISPATCH_ID.remove();
             } else {
@@ -394,17 +378,6 @@ public final class OresScheduler implements AutoCloseable {
         }
     }
 
-    /** Lifecycle registration for resources owned by this logical process. */
-    void onClose(Runnable callback) {
-        Objects.requireNonNull(callback, "callback");
-        if (closed.get()) {
-            callback.run();
-            return;
-        }
-        closeHooks.add(callback);
-        if (closed.get() && closeHooks.remove(callback)) callback.run();
-    }
-
     @Override
     public void close() {
         if (CURRENT.get() == this) {
@@ -413,10 +386,6 @@ public final class OresScheduler implements AutoCloseable {
                             + "close it from an outside/root scheduler task");
         }
         if (!closed.compareAndSet(false, true)) return;
-
-        // Closing a process must first revoke its timers/async wakeups.
-        for (Runnable callback : closeHooks) callback.run();
-        closeHooks.clear();
 
         for (TaskRunner<?> task : Set.copyOf(tasks)) {
             task.cancelFromSchedulerClose();
@@ -518,8 +487,6 @@ public final class OresScheduler implements AutoCloseable {
                 }
 
                 if (step instanceof Done<?> done) {
-                    turnTrace.transition(ProcessTurnTrace.Kind.DONE,
-                            currentDispatchId(), Thread.currentThread().threadId());
                     @SuppressWarnings("unchecked")
                     T value = (T) done.value();
                     finish(value);
@@ -527,15 +494,11 @@ public final class OresScheduler implements AutoCloseable {
                 }
 
                 if (step instanceof Await<?> await) {
-                    turnTrace.transition(ProcessTurnTrace.Kind.AWAIT,
-                            currentDispatchId(), Thread.currentThread().threadId());
                     armAwait(await.future());
                     return;
                 }
 
                 if (step instanceof Cooperate<?>) {
-                    turnTrace.transition(ProcessTurnTrace.Kind.COOPERATE,
-                            currentDispatchId(), Thread.currentThread().threadId());
                     armCooperate();
                     return;
                 }

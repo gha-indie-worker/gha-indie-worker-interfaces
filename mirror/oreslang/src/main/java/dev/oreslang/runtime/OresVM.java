@@ -3,9 +3,6 @@ package dev.oreslang.runtime;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadFactory;
@@ -30,14 +27,7 @@ public final class OresVM implements AutoCloseable {
     private enum StartupState { NEW, STARTING, STARTED, FAILED, CLOSED }
 
     private final ThreadPoolExecutor controlExecutor;
-    private final ThreadPoolExecutor guestExecutor;
-    private final ProcessTimerService processTimers = new ProcessTimerService();
     private final OresScheduler rootScheduler;
-    private final OresScheduler controlScheduler;
-    private final Executor processAdmission;
-    private final OresScheduler.TurnExecutor guestTurnAdmission;
-    private final Set<OresScheduler> supervisorSchedulers = ConcurrentHashMap.newKeySet();
-    private final AtomicLong nextSupervisorId = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile StartupState startupState = StartupState.NEW;
 
@@ -61,47 +51,16 @@ public final class OresVM implements AutoCloseable {
                 factory,
                 new ThreadPoolExecutor.AbortPolicy());
 
-        // Separate admission domains: blocked trusted user code may never
-        // consume the CONTROL/mailman carrier needed to wake it.
-        AtomicInteger guestCarrierId = new AtomicInteger();
-        ThreadFactory guestFactory = runnable -> Thread.ofPlatform()
-                .daemon(true)
-                .name("ores-guest-process-" + guestCarrierId.getAndIncrement())
-                .unstarted(runnable);
-        this.guestExecutor = new ThreadPoolExecutor(
-                controlParallelism, controlParallelism, 0L, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(DEFAULT_QUEUE_CAPACITY),
-                guestFactory, new ThreadPoolExecutor.AbortPolicy());
-
-        this.processAdmission = rootAdmission == null ? guestExecutor : rootAdmission;
-        this.guestTurnAdmission = turnExecutor;
-        // The ROOT process serializes user code, not the CONTROL carrier pool.
-        // It can migrate carriers between non-overlapping source turns.
         this.rootScheduler = OresScheduler.runtimeOwned(
                 "ores-root-scheduler",
-                1,
-                new SerialProcessExecutor(processAdmission, DEFAULT_QUEUE_CAPACITY),
-                turnExecutor);
-        // ActorGroup mailmen have individual execution leases and can run in
-        // parallel with ROOT and with mailmen from other groups.
-        this.controlScheduler = OresScheduler.runtimeOwned(
-                "ores-control-scheduler",
                 rootAdmission == null ? controlParallelism : 1,
-                // Strict/untrusted contexts have a caller-thread Truffle/JNI
-                // admission contract. Control/mailman turns must not escape
-                // that isolated queue onto arbitrary CONTROL carriers.
                 rootAdmission == null ? controlExecutor : rootAdmission,
                 turnExecutor);
         try {
-            processTimers.register(rootScheduler);
-            rootScheduler.onClose(() -> processTimers.closeScope(rootScheduler));
             startup();
         } catch (RuntimeException | Error failure) {
-            processTimers.close();
             rootScheduler.close();
-            controlScheduler.close();
             controlExecutor.shutdownNow();
-            guestExecutor.shutdownNow();
             throw failure;
         }
     }
@@ -120,9 +79,8 @@ public final class OresVM implements AutoCloseable {
     }
 
     /**
-     * Prestart one CONTROL carrier and one guest-process carrier.
-     * Remaining configured carriers are instantiated on load, not boot.
-     * ROOT and each supervisor still have separate logical execution leases.
+     * VM bootstrap barrier. The STARTED state is visible only after every
+     * configured CONTROL core carrier has been successfully prestarted.
      */
     synchronized void startup() {
         if (startupState == StartupState.CLOSED) {
@@ -140,14 +98,14 @@ public final class OresVM implements AutoCloseable {
 
         try {
             controlExecutor.allowCoreThreadTimeOut(false);
-            controlExecutor.prestartCoreThread();
-            // Strict/adversarial host admission uses its caller-thread queue.
-            if (processAdmission == guestExecutor) {
-                guestExecutor.prestartCoreThread();
-            }
-            if (controlExecutor.getPoolSize() < 1
-                    || (processAdmission == guestExecutor && guestExecutor.getPoolSize() < 1)) {
-                throw new IllegalStateException("runtime CONTROL/guest process bootstrap incomplete");
+            int required = controlExecutor.getCorePoolSize();
+            int newlyStarted = controlExecutor.prestartAllCoreThreads();
+            int live = controlExecutor.getPoolSize();
+            if (live != required) {
+                throw new IllegalStateException(
+                        "CONTROL dispatcher bootstrap incomplete: required="
+                                + required + ", live=" + live
+                                + ", newlyStarted=" + newlyStarted);
             }
             startupState = StartupState.STARTED;
         } catch (RuntimeException | Error failure) {
@@ -164,77 +122,12 @@ public final class OresVM implements AutoCloseable {
         return controlExecutor.getPoolSize();
     }
 
-    int guestCarrierCount() {
-        return guestExecutor.getPoolSize();
-    }
-
-    int controlParallelism() {
-        return controlScheduler.parallelism();
-    }
-
     public OresScheduler rootScheduler() {
         if (!started()) {
             throw new IllegalStateException(
                     "Oreslang VM root scheduler was requested before startup");
         }
         return rootScheduler;
-    }
-
-    /**
-     * Create an independent supervisor (daddy) process in this VM.
-     * The scheduler has its own single-flight guest lane and identity.
-     * Caller must keep supervisor-owned mutable state isolated from siblings;
-     * mailbox/process ownership checking is a separate language boundary.
-     */
-    public synchronized OresScheduler createSupervisorScheduler(String name) {
-        Objects.requireNonNull(name, "name");
-        if (!name.matches("[A-Za-z0-9._-]{1,64}")) {
-            throw new IllegalArgumentException("invalid supervisor process name");
-        }
-        if (!started() || closed.get()) {
-            throw new RejectedExecutionException("VM closed before supervisor creation");
-        }
-        OresScheduler supervisor = OresScheduler.runtimeOwned(
-                "ores-supervisor-" + name + "-" + nextSupervisorId.incrementAndGet(),
-                1,
-                new SerialProcessExecutor(processAdmission, DEFAULT_QUEUE_CAPACITY),
-                guestTurnAdmission);
-        try {
-            processTimers.register(supervisor);
-            supervisor.onClose(() -> processTimers.closeScope(supervisor));
-        } catch (RuntimeException | Error failed) {
-            supervisor.close();
-            throw failed;
-        }
-        supervisorSchedulers.add(supervisor);
-        return supervisor;
-    }
-
-    /** Schedule process-owned timeouts; timer workers never execute user code. */
-    public ProcessTimerService.TimerHandle scheduleTimer(
-            OresScheduler owner, java.time.Duration delay, Runnable callback) {
-        if (!started() || closed.get()) {
-            throw new RejectedExecutionException("timer scheduling requires a live VM");
-        }
-        return processTimers.schedule(owner, delay, callback);
-    }
-
-    public ProcessTimerService.TimerHandle scheduleTimer(
-            OresScheduler owner, java.time.Duration delay) {
-        return scheduleTimer(owner, delay, null);
-    }
-
-    /** End the short-lived ROOT main scope without keeping it alive for timers. */
-    void finishRootMain() {
-        processTimers.closeScope(rootScheduler);
-    }
-
-    int activeTimers(OresScheduler owner) {
-        return processTimers.activeTimerCount(owner);
-    }
-
-    public int supervisorCount() {
-        return supervisorSchedulers.size();
     }
 
     /**
@@ -251,7 +144,7 @@ public final class OresVM implements AutoCloseable {
             throw new RejectedExecutionException(
                     "Oreslang VM CONTROL dispatcher is not available");
         }
-        return controlScheduler.startSync(() -> {
+        return rootScheduler.startSync(() -> {
             task.run();
             return null;
         });
@@ -261,48 +154,24 @@ public final class OresVM implements AutoCloseable {
         return OresScheduler.current() == rootScheduler;
     }
 
-    /** ROOT or a known daddy, never a free-floating user thread pool. */
-    boolean isControlSchedulerCurrent() {
-        return OresScheduler.current() == controlScheduler;
-    }
-
-    public boolean isGuestProcessSchedulerCurrent() {
-        OresScheduler executing = OresScheduler.current();
-        return executing == rootScheduler || supervisorSchedulers.contains(executing);
-    }
-
     @Override
     public synchronized void close() {
         if (!closed.compareAndSet(false, true)) return;
         startupState = StartupState.CLOSED;
-        processTimers.close();
         try {
             rootScheduler.close();
         } finally {
+            controlExecutor.shutdownNow();
             try {
-                for (OresScheduler supervisor : supervisorSchedulers) {
-                    supervisor.close();
+                if (!controlExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException(
+                            "Oreslang CONTROL scheduler carriers did not terminate");
                 }
-                supervisorSchedulers.clear();
-            } finally {
-                try {
-                    controlScheduler.close();
-                } finally {
-                    controlExecutor.shutdownNow();
-                    guestExecutor.shutdownNow();
-                    try {
-                        if (!controlExecutor.awaitTermination(5, TimeUnit.SECONDS)
-                                || !guestExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                            throw new IllegalStateException(
-                                    "Oreslang CONTROL/guest-process carriers did not terminate");
-                        }
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        throw new IllegalStateException(
-                                "interrupted while closing Oreslang CONTROL scheduler",
-                                interrupted);
-                    }
-                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "interrupted while closing Oreslang CONTROL scheduler",
+                        interrupted);
             }
         }
     }
