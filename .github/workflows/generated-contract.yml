@@ -26,3 +26,11 @@ jobs:
         run: python3 -m pip install --quiet jsonschema
       - name: Check generated policy, freeze bits, and JSON Schema runtime
         run: python3 scripts/check-generated-contract.py --freeze --require-readonly
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Test exact mirrored Oreslang actor guest lane and warmup
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorAffinityDispatcherTest,SharedActorSingleFlightContractTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
