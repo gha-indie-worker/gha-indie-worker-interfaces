@@ -1,5 +1,7 @@
 name: Oreslang Rust single-flight model mirror
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - 'test/oreslang-single-flight-20261009'
