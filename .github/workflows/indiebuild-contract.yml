@@ -67,6 +67,14 @@ jobs:
           TSJSV_VERIFY_VERIFICATION: .typespec-json-schema-validator/indiebuild-consumer-verification.json
         run: node .tjsv/scripts/verify-consumer.mjs
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and run exact Oreslang actor-lane JVM tests
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest,ActorAffinityDispatcherTest,SharedActorSingleFlightContractTest test
       - name: Retain deterministic contract evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
