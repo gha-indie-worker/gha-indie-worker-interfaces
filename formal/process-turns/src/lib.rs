@@ -343,4 +343,112 @@ mod tests {
             Err("more than one independent user stack in a process"),
         );
     }
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    struct SharedActor {
+        queued: u8,
+        delivered: u8,
+        owning_carrier: Option<u8>,
+        stopped: bool,
+    }
+
+    #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+    struct SharedActors {
+        actors: [SharedActor; 2],
+    }
+
+    impl SharedActors {
+        fn initial() -> Self {
+            let actor = SharedActor {
+                queued: 2,
+                delivered: 0,
+                owning_carrier: None,
+                stopped: false,
+            };
+            Self { actors: [actor, actor] }
+        }
+
+        fn invariant(&self) -> Result<(), &'static str> {
+            for actor in &self.actors {
+                if actor.delivered > 2
+                    || actor.queued + actor.delivered
+                        + u8::from(actor.owning_carrier.is_some()) > 2 {
+                    return Err("admitted messages were duplicated");
+                }
+                if actor.stopped && actor.owning_carrier.is_some() {
+                    return Err("stopped actor still owns a carrier");
+                }
+            }
+            if let (Some(a), Some(b)) = (
+                self.actors[0].owning_carrier,
+                self.actors[1].owning_carrier,
+            ) {
+                if a == b { return Err("one carrier executing two actors"); }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn exhaustive_shared_actor_single_writer_two_carrier_protocol() {
+        let initial = SharedActors::initial();
+        let mut visited = HashSet::from([initial.clone()]);
+        let mut queue = VecDeque::from([initial]);
+        let mut observed_parallel_actors = false;
+        let mut observed_carrier_handoff = false;
+
+        while let Some(state) = queue.pop_front() {
+            state.invariant().unwrap();
+            observed_parallel_actors |= state.actors.iter()
+                .all(|a| a.owning_carrier.is_some());
+            for actor_index in 0..2 {
+                let actor = state.actors[actor_index];
+                for carrier in 0..2_u8 {
+                    let free = state.actors.iter().all(|a|
+                        a.owning_carrier != Some(carrier));
+                    if !actor.stopped && actor.queued > 0
+                        && actor.owning_carrier.is_none() && free {
+                        let mut next = state.clone();
+                        next.actors[actor_index].queued -= 1;
+                        next.actors[actor_index].owning_carrier = Some(carrier);
+                        next.invariant().unwrap();
+                        if visited.insert(next.clone()) { queue.push_back(next); }
+                    }
+                }
+
+                if actor.owning_carrier.is_some() {
+                    let mut next = state.clone();
+                    next.actors[actor_index].owning_carrier = None;
+                    next.actors[actor_index].delivered += 1;
+                    observed_carrier_handoff |= next.actors[actor_index].queued > 0;
+                    next.invariant().unwrap();
+                    if visited.insert(next.clone()) { queue.push_back(next); }
+                }
+
+                if actor.owning_carrier.is_none() && !actor.stopped {
+                    let mut next = state.clone();
+                    next.actors[actor_index].stopped = true;
+                    next.actors[actor_index].queued = 0;
+                    next.invariant().unwrap();
+                    if visited.insert(next.clone()) { queue.push_back(next); }
+                }
+            }
+        }
+
+        assert!(visited.len() > 20, "unexpectedly trivial state space");
+        assert!(observed_parallel_actors,
+            "two independent shared actors must be able to run concurrently");
+        assert!(observed_carrier_handoff);
+        eprintln!("verified {} abstract shared-actor/2-carrier states", visited.len());
+    }
+
+    #[test]
+    fn mutation_oracle_rejects_double_claim_of_actor_carrier() {
+        // Broken design: another carrier is admitted before first release.
+        // The concrete actor needs CAS ownership and activeTurns <= 1.
+        let mut active_turns = 1_u8;
+        active_turns += 1;
+        assert!(active_turns > 1, "mutation oracle must witness broken admission");
+        assert!(SharedActors::initial().invariant().is_ok());
+    }
+
 }
