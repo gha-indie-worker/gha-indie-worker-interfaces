@@ -26,7 +26,9 @@ end
 `m.send()` sends `m.value`; `m.send(value)` sends an explicit output.
 `self.send(value)` remains a general actor output, and automatically carries
 the current message sequence when invoked inside a receive. ActorOutput
-exposes `message_sequence: Option<int>`. `m.message_id` is an opaque
+exposes `message_sequence: Option<int>`. ActorGroup Mailman `ActorMail`
+now exposes `requestSequence: Optional<long>` for the same correlation.
+`m.message_id` is an opaque
 `ActorId(UUID):sequence` string. It is not a shared pointer, send authority,
 or memory address.
 
@@ -82,7 +84,9 @@ Run `ActorConcurrentMailboxExecutionTest`, the pre-existing
 `SourceActorSpawnExecutionTest` default-concurrency ordering regression,
 `ActorCooperateOrderingTest`, `ActorSharedMailboxAccountingTest`,
 `ActorContinuationCapacityTest`, `ActorStructuredCancellationTest`,
-`ActorModuleStateOwnershipTest` and the Rust scheduler/publication models.
+`ActorModuleStateOwnershipTest` and the Rust scheduler/publication models, including
+`formal/process-turns/tests/concurrent_mail.rs`'s exhaustive 1/2-inflight
+reference model and explicit mutation-oracle counterexamples.
 
 Must test: 1/5/32/1024 limits; 5 suspended handlers; early done;
 double done; output correlation; priority fairness under hot cooperate loops;

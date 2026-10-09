@@ -19,6 +19,9 @@ jobs:
           let f=[initial],seen=new Map([[JSON.stringify(initial),initial]]);for(let d=0;d<=bound;d++){const n=[];for(const s of f){assert(inv(s));for(const [name,step] of steps){const t=step(structuredClone(s));assert(inv(t),`${name} violated worker invariant`);const k=JSON.stringify(t);if(!seen.has(k)){seen.set(k,t);n.push(t)}}}f=n}assert(seen.size>=3);console.log(`worker formal model OK states=${seen.size} bound=${bound}`);
           NODE
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Exhaustive Rust actor in-flight and ownership model
+        run: cargo test --manifest-path mirror/oreslang/formal/process-turns/Cargo.toml --all-targets
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
