@@ -3088,8 +3088,15 @@ public final class OwnershipChecker {
         }
         Ast.ClassDecl klass = findClass(type.name());
         if (klass == null || klass.actorKind() != Ast.ActorKind.NONE) return false;
+        // Generic substitution and recursive nominal graphs need a dedicated
+        // clone-contract elaboration. A shallow type name match isn't proof
+        // that inherited fields are safe to duplicate.
+        if (!klass.genericParameters().isEmpty() || !type.arguments().isEmpty()) return false;
         if (!visitingClasses.add(klass.name())) return false;
         try {
+            for (Ast.TypeRef parent : klass.parents()) {
+                if (!isDeepCopyableType(parent, visitingClasses)) return false;
+            }
             for (Ast.FieldDecl field : klass.fields()) {
                 if (!isDeepCopyableType(ownershipFieldType(field), visitingClasses)) return false;
             }
