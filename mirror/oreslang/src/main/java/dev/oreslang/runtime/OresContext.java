@@ -403,6 +403,28 @@ public final class OresContext implements AutoCloseable {
         return task.join();
     }
 
+    /**
+     * Fail closed for interpreter function evaluation outside an actor,
+     * mailman or VM-owned ROOT/supervisor user-code turn. Runtime bookkeeping,
+     * foreign Future/timer completions and JNI callbacks do not qualify.
+     */
+    public void requireGuestExecutionTurn() {
+        if (ActorRuntime.inActorExecution()) {
+            if (ActorRuntime.currentActorRuntime() != actors) {
+                throw new SecurityException("guest actor belongs to another OresContext");
+            }
+            return;
+        }
+        if (ActorRuntime.inActorGroupMailmanExecution()) {
+            if (vm.isControlSchedulerCurrent()) return;
+            throw new SecurityException("guest mailman callback is off CONTROL lane");
+        }
+        if (!vm.isGuestProcessSchedulerCurrent()) {
+            throw new SecurityException(
+                    "guest function execution requires its owning process lane");
+        }
+    }
+
     private void executeRootTurn(Runnable turn) {
         executeGuestTurn(turn, isolatePolicy.adversarial());
     }

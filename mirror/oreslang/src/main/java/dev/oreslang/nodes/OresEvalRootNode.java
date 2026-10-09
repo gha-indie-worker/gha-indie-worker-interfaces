@@ -668,6 +668,7 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object executeRaw(Invocation invocation) {
+            context.requireGuestExecutionTurn();
             return switch (invocation.kind()) {
                 case FUNCTION -> callFunctionRaw(
                         (Ast.FunctionDecl) invocation.target(),

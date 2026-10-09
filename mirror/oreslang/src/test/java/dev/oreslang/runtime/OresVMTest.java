@@ -9,6 +9,24 @@ import org.junit.jupiter.api.Test;
 
 final class OresVMTest {
     @Test
+    void onlyRootOrRegisteredSupervisorsAreRecognizedAsGuestProcessLanes()
+            throws Exception {
+        try (OresVM vm = OresVM.create(Runnable::run);
+             OresScheduler unrelated = new OresScheduler(1)) {
+            assertTrue(!vm.isGuestProcessSchedulerCurrent(),
+                    "host/test thread is not an Oreslang guest lane");
+            OresScheduler daddy = vm.createSupervisorScheduler("daddy");
+            assertTrue(vm.rootScheduler().startSync(vm::isGuestProcessSchedulerCurrent)
+                    .get(5, TimeUnit.SECONDS));
+            assertTrue(daddy.startSync(vm::isGuestProcessSchedulerCurrent)
+                    .get(5, TimeUnit.SECONDS));
+            assertTrue(!unrelated.startSync(vm::isGuestProcessSchedulerCurrent)
+                    .get(5, TimeUnit.SECONDS));
+            assertTrue(!vm.executeControl(() -> {}).isCancelled());
+        }
+    }
+
+    @Test
     void rootGuestAdmissionCanStayOnCallerAcrossPendingAwait() throws Exception {
         var turns = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
         try (OresVM vm = OresVM.create(Runnable::run, turns::add)) {

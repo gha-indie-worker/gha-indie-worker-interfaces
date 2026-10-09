@@ -242,6 +242,16 @@ public final class OresVM implements AutoCloseable {
         return OresScheduler.current() == rootScheduler;
     }
 
+    /** ROOT or a known daddy, never a free-floating user thread pool. */
+    boolean isControlSchedulerCurrent() {
+        return OresScheduler.current() == controlScheduler;
+    }
+
+    public boolean isGuestProcessSchedulerCurrent() {
+        OresScheduler executing = OresScheduler.current();
+        return executing == rootScheduler || supervisorSchedulers.contains(executing);
+    }
+
     @Override
     public synchronized void close() {
         if (!closed.compareAndSet(false, true)) return;
