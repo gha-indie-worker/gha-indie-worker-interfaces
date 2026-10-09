@@ -4521,6 +4521,10 @@ public final class TypeChecker {
         if (named.name().equals("Mutex") || named.name().equals("MutexGuard")
                 || named.name().equals("Future") || named.name().equals("Iterator")
                 || named.name().equals("AsyncIterator") || named.name().equals("SharedMutex")) return false;
+        if (named.name().equals("Readonly")) {
+            return named.arguments().size() == 1
+                    && isSharedSafe(named.arguments().getFirst(), seen, genericBindings);
+        }
         if (named.name().equals("OptionUnwrapError")) return named.arguments().isEmpty();
         if (named.name().equals("Option") || named.name().equals("IteratorResult")) {
             return named.arguments().size() == 1 && isSharedSafe(named.arguments().getFirst(), seen, genericBindings);
@@ -7017,8 +7021,12 @@ public final class TypeChecker {
                 if (ref.arguments().size() != 1 || ref.inferArguments()) {
                     throw new IllegalArgumentException("Readonly<T> requires one owned type");
                 }
-                yield new Named("Readonly", List.of(
-                        resolve(ref.arguments().getFirst(), generics, self)));
+                Type wrapped = resolve(ref.arguments().getFirst(), generics, self);
+                if (!isSharedSafe(wrapped, new LinkedHashSet<>(), Map.of())) {
+                    throw new IllegalArgumentException(
+                            "Readonly<T> payload must be proven data-only and share-safe");
+                }
+                yield new Named("Readonly", List.of(wrapped));
             }
             case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "bigint" -> Primitive.INT;
             case "f32", "f64", "float" -> Primitive.FLOAT;

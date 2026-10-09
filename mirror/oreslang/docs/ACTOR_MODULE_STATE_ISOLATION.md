@@ -19,9 +19,11 @@ targets use the *callee source-unit identity* as part of their state key, so
 different actors importing the same module never alias its writable slots.
 
 ROOT has a separate per-evaluator map for its own serial execution domain.
-Unadmitted host threads, unrelated runtimes, supervisors and ActorGroup
-mailmen **fail closed** for module-field access until supervisor-owned module
-state is explicitly lowered. Do not silently route those accesses to ROOT.
+Unadmitted host threads, unrelated runtimes and ActorGroup mailmen **fail
+closed** for module-field access. Supervisors now have independent
+generation-qualified module cells keyed to their admitted single-flight
+scheduler lanes, automatically discarded at supervisor retirement.
+Do not silently route other processes' accesses to ROOT.
 
 This is logical isolation inside one JVM, not physical heap separation, and
 does not establish native JIT code-cache sharing across Truffle Engines.
@@ -34,9 +36,11 @@ does not establish native JIT code-cache sharing across Truffle Engines.
   initialized state.
 - Only a public `let` field may be reassigned by a module member write.
   `val`/`const` are not rebindable.
-- The compiler/ownership pass validates local module writes. Cross-code-unit
-  writes that cannot be proven from a linked field contract remain unsupported
-  until cross-unit typing is implemented; runtime validation is defense in depth.
+- The compiler/ownership pass validates local module writes. Cross-code-unit direct reads/calls/writes are checked by the linker against
+  explicit imported module declarations, visibility, callable arity and
+  writable-let permissions. Generic substitutions and wildcard namespace
+  projections still require full common typed Contract IR; runtime validation
+  is defense in depth.
 - Source module `init` runs in ROOT during linked-program bootstrap. It must
   not be treated as actor-local mutable module initialization.
 

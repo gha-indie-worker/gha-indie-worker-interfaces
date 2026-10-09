@@ -3150,7 +3150,8 @@ public final class OwnershipChecker {
     private boolean isCopyType(Ast.TypeRef type) {
         if (type == null || type.isBorrow()) return false;
         if (type.name().equals("Readonly")) {
-            return type.arguments().size() == 1;
+            return type.arguments().size() == 1
+                    && isDeepCopyableType(type.arguments().getFirst(), new HashSet<>());
         }
         if (type.isUnion()) return type.arguments().stream().allMatch(this::isCopyType);
         if (type.isTupleType()) return type.arguments().stream().allMatch(this::isCopyType);
