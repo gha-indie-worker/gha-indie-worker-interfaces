@@ -144,6 +144,21 @@ public final class LinkedProgramRunner {
             Map<String, String> environment,
             OutputStream out,
             OutputStream err) throws IOException {
+        return run(entryFile, policy, permissions, permissionCheckMode,
+                executionProfile, allowedHostClasses, environment, out, err, false);
+    }
+
+    public static IncrementalCompiler.BuildResult run(
+            Path entryFile,
+            IsolatePolicy policy,
+            RuntimePermissions permissions,
+            PermissionCheckMode permissionCheckMode,
+            ExecutionProfile executionProfile,
+            Set<String> allowedHostClasses,
+            Map<String, String> environment,
+            OutputStream out,
+            OutputStream err,
+            boolean warm) throws IOException {
         Path entry = entryFile.toAbsolutePath().normalize();
         if (!Files.isRegularFile(entry)) throw new IllegalArgumentException("not a file: " + entry);
 
@@ -183,6 +198,14 @@ public final class LinkedProgramRunner {
                         effectiveHostClasses,
                         permissions,
                         permissionCheckMode);
+                if (warm) {
+                    String[] runtimeArgs = policy.applicationArguments(
+                            executionProfile, permissions, permissionCheckMode);
+                    String[] warmedArgs = java.util.Arrays.copyOf(
+                            runtimeArgs, runtimeArgs.length + 1);
+                    warmedArgs[runtimeArgs.length] = "--warm";
+                    builder.arguments(OresLanguage.ID, warmedArgs);
+                }
                 if (out != null) builder.out(forwardingStream(out));
                 if (err != null) builder.err(forwardingStream(err));
 

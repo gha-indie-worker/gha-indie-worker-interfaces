@@ -111,6 +111,9 @@ public final class OresContext implements AutoCloseable {
             async = new AsyncRuntime(this::executeAsyncTurn);
             gc = new RuntimeGarbageCollector();
             actors.setActorExitHook(gc::retireActorDomain);
+            if (java.util.Arrays.asList(env.getApplicationArguments()).contains("--warm")) {
+                actors.warmActorPools();
+            }
 
             this.vm = vm;
             this.actors = actors;

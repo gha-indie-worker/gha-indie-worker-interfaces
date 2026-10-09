@@ -30,6 +30,7 @@ public final class OresVM implements AutoCloseable {
     private enum StartupState { NEW, STARTING, STARTED, FAILED, CLOSED }
 
     private final ThreadPoolExecutor controlExecutor;
+    private final ThreadPoolExecutor guestExecutor;
     private final ProcessTimerService processTimers = new ProcessTimerService();
     private final OresScheduler rootScheduler;
     private final OresScheduler controlScheduler;
@@ -60,7 +61,19 @@ public final class OresVM implements AutoCloseable {
                 factory,
                 new ThreadPoolExecutor.AbortPolicy());
 
-        this.processAdmission = rootAdmission == null ? controlExecutor : rootAdmission;
+        // Separate admission domains: blocked trusted user code may never
+        // consume the CONTROL/mailman carrier needed to wake it.
+        AtomicInteger guestCarrierId = new AtomicInteger();
+        ThreadFactory guestFactory = runnable -> Thread.ofPlatform()
+                .daemon(true)
+                .name("ores-guest-process-" + guestCarrierId.getAndIncrement())
+                .unstarted(runnable);
+        this.guestExecutor = new ThreadPoolExecutor(
+                controlParallelism, controlParallelism, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(DEFAULT_QUEUE_CAPACITY),
+                guestFactory, new ThreadPoolExecutor.AbortPolicy());
+
+        this.processAdmission = rootAdmission == null ? guestExecutor : rootAdmission;
         this.guestTurnAdmission = turnExecutor;
         // The ROOT process serializes user code, not the CONTROL carrier pool.
         // It can migrate carriers between non-overlapping source turns.
@@ -88,6 +101,7 @@ public final class OresVM implements AutoCloseable {
             rootScheduler.close();
             controlScheduler.close();
             controlExecutor.shutdownNow();
+            guestExecutor.shutdownNow();
             throw failure;
         }
     }
@@ -106,8 +120,9 @@ public final class OresVM implements AutoCloseable {
     }
 
     /**
-     * VM bootstrap barrier. The STARTED state is visible only after every
-     * configured CONTROL core carrier has been successfully prestarted.
+     * Prestart one CONTROL carrier and one guest-process carrier.
+     * Remaining configured carriers are instantiated on load, not boot.
+     * ROOT and each supervisor still have separate logical execution leases.
      */
     synchronized void startup() {
         if (startupState == StartupState.CLOSED) {
@@ -125,14 +140,14 @@ public final class OresVM implements AutoCloseable {
 
         try {
             controlExecutor.allowCoreThreadTimeOut(false);
-            int required = controlExecutor.getCorePoolSize();
-            int newlyStarted = controlExecutor.prestartAllCoreThreads();
-            int live = controlExecutor.getPoolSize();
-            if (live != required) {
-                throw new IllegalStateException(
-                        "CONTROL dispatcher bootstrap incomplete: required="
-                                + required + ", live=" + live
-                                + ", newlyStarted=" + newlyStarted);
+            controlExecutor.prestartCoreThread();
+            // Strict/adversarial host admission uses its caller-thread queue.
+            if (processAdmission == guestExecutor) {
+                guestExecutor.prestartCoreThread();
+            }
+            if (controlExecutor.getPoolSize() < 1
+                    || (processAdmission == guestExecutor && guestExecutor.getPoolSize() < 1)) {
+                throw new IllegalStateException("runtime CONTROL/guest process bootstrap incomplete");
             }
             startupState = StartupState.STARTED;
         } catch (RuntimeException | Error failure) {
@@ -147,6 +162,10 @@ public final class OresVM implements AutoCloseable {
 
     int controlCarrierCount() {
         return controlExecutor.getPoolSize();
+    }
+
+    int guestCarrierCount() {
+        return guestExecutor.getPoolSize();
     }
 
     int controlParallelism() {
@@ -270,10 +289,12 @@ public final class OresVM implements AutoCloseable {
                     controlScheduler.close();
                 } finally {
                     controlExecutor.shutdownNow();
+                    guestExecutor.shutdownNow();
                     try {
-                        if (!controlExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                        if (!controlExecutor.awaitTermination(5, TimeUnit.SECONDS)
+                                || !guestExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                             throw new IllegalStateException(
-                                    "Oreslang CONTROL scheduler carriers did not terminate");
+                                    "Oreslang CONTROL/guest-process carriers did not terminate");
                         }
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();

@@ -58,8 +58,10 @@ final class OresVMTest {
             assertTrue(vm.started());
             assertEquals(1, vm.rootScheduler().parallelism(),
                     "ROOT is one logical user-code process");
-            assertEquals(vm.controlParallelism(), vm.controlCarrierCount(),
-                    "all CONTROL carriers must be resident before root execution");
+            assertEquals(1, vm.controlCarrierCount(),
+                    "only one CONTROL carrier should be eager on bootstrap");
+            assertEquals(1, vm.guestCarrierCount(),
+                    "only one guest-process carrier should be eager on bootstrap");
 
             OresFuture<String> first =
                     vm.rootScheduler().start(resume -> {
@@ -72,7 +74,7 @@ final class OresVMTest {
                     });
 
             String threadName = first.get(5, TimeUnit.SECONDS);
-            assertTrue(threadName.startsWith("ores-control-plane-"));
+            assertTrue(threadName.startsWith("ores-guest-process-"));
         } finally {
             vm.close();
         }
@@ -101,7 +103,8 @@ final class OresVMTest {
             assertTrue(dispatch > 0L);
             vm.startup();
             vm.startup();
-            assertEquals(vm.controlParallelism(), vm.controlCarrierCount());
+            assertTrue(vm.controlCarrierCount() >= 1);
+            assertTrue(vm.guestCarrierCount() >= 1);
         } finally {
             vm.close();
         }

@@ -31,7 +31,7 @@ public final class ProcessTimerService implements AutoCloseable {
         clock = new ScheduledThreadPoolExecutor(1, factory);
         clock.setRemoveOnCancelPolicy(true);
         clock.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-        clock.prestartAllCoreThreads();
+        // A timer carrier is allocated only when the first timer is registered.
     }
 
     void register(OresScheduler owner) {
