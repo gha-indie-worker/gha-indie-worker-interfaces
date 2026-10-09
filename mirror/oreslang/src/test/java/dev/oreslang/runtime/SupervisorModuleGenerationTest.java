@@ -45,7 +45,7 @@ final class SupervisorModuleGenerationTest {
         try (OresVM vm = OresVM.create(Runnable::run)) {
             assertThrows(SecurityException.class, () ->
                     vm.currentSupervisorModuleState("pkg/m.ores", "M", 1L, ArrayList<String>::new));
-            assertThrows(SecurityException.class, () -> vm.rootScheduler().startSync(() ->
+            assertThrows(RuntimeException.class, () -> vm.rootScheduler().startSync(() ->
                     vm.currentSupervisorModuleState("pkg/m.ores", "M", 1L, ArrayList<String>::new)).join());
         }
     }

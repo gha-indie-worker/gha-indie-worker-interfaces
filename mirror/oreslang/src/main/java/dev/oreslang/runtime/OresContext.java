@@ -356,8 +356,11 @@ public final class OresContext implements AutoCloseable {
             return awaitHostRootTask(task);
         } finally {
             // Deterministic scope teardown: no explicit process.gc() needed.
-            vm.finishRootMain();
-            garbageCollector.retireProcessDomain(vm.rootScheduler());
+            try {
+                vm.finishRootMain();
+            } finally {
+                garbageCollector.retireProcessDomain(vm.rootScheduler());
+            }
         }
     }
 

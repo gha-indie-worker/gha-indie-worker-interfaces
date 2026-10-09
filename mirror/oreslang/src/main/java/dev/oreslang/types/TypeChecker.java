@@ -57,6 +57,8 @@ public final class TypeChecker {
     private final Set<String> ambiguousInterfaces = new HashSet<>();
     private final Set<String> ambiguousTypeAliases = new HashSet<>();
     private final Set<String> importedValues = new HashSet<>();
+    /** Values whose member writes must be resolved by the linked ABI pass. */
+    private final Set<String> importedModuleValues = new HashSet<>();
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
     private Ast.ActorKind currentActorKind = Ast.ActorKind.NONE;
     private Ast.ClassDecl currentClassOwner;
@@ -123,6 +125,11 @@ public final class TypeChecker {
 
         for (Ast.ImportDecl imported : program.imports()) {
             ImportRules.validate(imported);
+            if (imported.kind() == Ast.ImportKind.MODULE && !imported.wildcard()) {
+                for (String exported : imported.names()) {
+                    importedModuleValues.add(ImportRules.localName(imported, exported));
+                }
+            }
             for (String name : ImportRules.exposedBindings(imported)) {
                 if (!exposed.add(name)) throw new IllegalArgumentException("duplicate imported name '" + name + "'");
                 if (localNames.contains(name)) {
@@ -4327,6 +4334,14 @@ public final class TypeChecker {
                         "module field '" + name.name() + "." + member.member()
                                 + "' is not a public mutable let binding");
             }
+        }
+        if (writing && member.receiver() instanceof Ast.NameExpr imported
+                && env.lookup(imported.name()) == null
+                && importedModuleValues.contains(imported.name())) {
+            // Source-only checks cannot see the target unit. The mandatory
+            // linker checks the exact module export/LET contract, and the
+            // evaluator rechecks it at execution.
+            return Unknown.INSTANCE;
         }
         Type directReceiver = deref(typeOf(member.receiver(), env, generics, self));
         if (directReceiver instanceof Named named && named.name().equals("Readonly")) {

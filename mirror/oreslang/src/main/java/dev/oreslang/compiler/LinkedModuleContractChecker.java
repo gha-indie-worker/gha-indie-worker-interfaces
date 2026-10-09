@@ -113,6 +113,7 @@ final class LinkedModuleContractChecker {
         Ast.ModuleDecl module = namespace(member.receiver(), locals);
         if (module == null) return;
         int matches = 0;
+        Ast.FunctionDecl selected = null;
         for (Ast.Decl decl : module.declarations()) {
             if (decl instanceof Ast.FunctionDecl fn
                     && fn.name().equals(member.member())
@@ -120,12 +121,38 @@ final class LinkedModuleContractChecker {
                     && fn.parameters().size() == call.arguments().size()
                     && fn.actorKind() == Ast.ActorKind.NONE) {
                 matches++;
+                selected = fn;
             }
         }
         if (matches != 1) throw new IllegalArgumentException(
                 "imported module callable " + module.name() + "." + member.member()
                         + " requires exactly one public non-actor overload of arity "
                         + call.arguments().size());
+        for (int i = 0; i < selected.parameters().size(); i++) {
+            checkLiteralContract(call.arguments().get(i),
+                    selected.parameters().get(i).type(),
+                    module.name() + "." + member.member() + " argument " + (i + 1));
+        }
+    }
+
+    private static void checkLiteralContract(Ast.Expr actual, Ast.TypeRef expected, String where) {
+        if (!(actual instanceof Ast.LiteralExpr literal) || expected == null) return;
+        Object value = literal.value();
+        String name = expected.name();
+        boolean mismatch = switch (name) {
+            case "int", "uint", "i8", "i16", "i32", "i64",
+                    "u8", "u16", "u32", "u64", "bigint" ->
+                    !(value instanceof Byte || value instanceof Short
+                            || value instanceof Integer || value instanceof Long
+                            || value instanceof java.math.BigInteger);
+            case "float", "f32", "f64", "decimal" -> !(value instanceof Number);
+            case "string", "String" -> !(value instanceof String);
+            case "bool", "Bool" -> !(value instanceof Boolean);
+            default -> false; // symbolic/generic types require full typed linker
+        };
+        if (mismatch) throw new IllegalArgumentException(
+                "cross-file module ABI type mismatch at " + where
+                        + ": expected " + expected.name());
     }
 
     private void checkWrite(Ast.Expr target, Set<String> locals) {

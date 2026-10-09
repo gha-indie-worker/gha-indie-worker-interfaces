@@ -66,6 +66,18 @@ final class LinkedModuleContractEnforcementTest {
     }
 
     @Test
+    void knownWrongPrimitiveArgumentFailsAtTheLinkedABIBoundary() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> compile("""
+                    pub routine main(): void {
+                      Ledger.add("not an integer");
+                      return;
+                    }
+                    """));
+        assertTrue(error.getMessage().contains("ABI type mismatch"), error.getMessage());
+    }
+
+    @Test
     void cannotWriteImmutableImportedModuleField() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> compile("""

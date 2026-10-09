@@ -1646,6 +1646,13 @@ public final class OwnershipChecker {
             return;
         }
         if (target instanceof Ast.MemberExpr member) {
+            if (member.receiver() instanceof Ast.NameExpr imported
+                    && scope.lookup(imported.name()) == null
+                    && importedModuleTypes.contains(imported.name())) {
+                // Opaque per-unit import: LinkedModuleContractChecker proves
+                // that this field is public LET; runtime checks again.
+                return;
+            }
             if (member.receiver() instanceof Ast.NameExpr name
                     && scope.lookup(name.name()) == null
                     && moduleDeclarations.containsKey(name.name())) {
