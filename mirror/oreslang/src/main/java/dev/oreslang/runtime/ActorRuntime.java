@@ -6144,19 +6144,29 @@ public final class ActorRuntime implements AutoCloseable {
 
         private void endTurn() {
             synchronized (lifecycleLock) {
-                if (activeTurns != 1) {
-                    throw new IllegalStateException(
-                            "actor execution lease accounting violation for " + ref.id()
-                                    + ": activeTurns=" + activeTurns);
-                }
-                if (!guestTurnOwner.compareAndSet(Thread.currentThread(), null)) {
+                Thread nativeOwner = Thread.currentThread();
+                if (guestTurnOwner.get() != nativeOwner) {
                     throw new IllegalStateException(
                             "actor native-thread execution lease released by a foreign carrier for "
                                     + ref.id());
                 }
+                int observedTurns = activeTurns;
+                // Even if host-side invariant instrumentation detects corrupt
+                // turn accounting, this native owner MUST release the lock,
+                // so fail-stop cannot strand actor memory or executor lanes.
                 activeTurns = 0;
+                if (!guestTurnOwner.compareAndSet(nativeOwner, null)) {
+                    throw new IllegalStateException(
+                            "actor native-thread execution lease changed during release for "
+                                    + ref.id());
+                }
                 if (stopped.get()) finalizeStopLocked();
                 lifecycleLock.notifyAll();
+                if (observedTurns != 1) {
+                    throw new IllegalStateException(
+                            "actor execution lease accounting violation for " + ref.id()
+                                    + ": activeTurns=" + observedTurns);
+                }
             }
         }
 
