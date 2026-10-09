@@ -815,12 +815,15 @@ public final class OwnershipChecker {
                 }
                 case "copy" -> {
                     ValueInfo source = checkExpr(argument, scope, false);
-                    if (source.kind != ValueKind.COPY) {
-                        throw error(
-                                "rt copy of move-only values requires the Symbol.rtCopy copy-contract lowering; "
-                                        + "this current-main convergence patch fails closed instead of aliasing");
+                    if (!isDeepCopyableType(source.type, new HashSet<>())) {
+                        throw error("rt copy requires a statically known owned data graph "
+                                + "(scalars, arrays, tuples, records or non-actor classes); "
+                                + "borrows, actors, executable values and core capabilities are not copyable");
                     }
-                    yield source;
+                    // A mutable copy is an independently owned object. The
+                    // original is not consumed; no writable aliases survive.
+                    yield new ValueInfo(source.type, source.kind == ValueKind.COPY
+                            ? ValueKind.COPY : ValueKind.MOVE_ONLY, null);
                 }
                 case "share" -> {
                     ValueInfo source = checkExpr(argument, scope, false);
@@ -3051,6 +3054,49 @@ public final class OwnershipChecker {
         if (type == null) return ValueKind.MOVE_ONLY;
         if (type.isBorrow()) return type.mutableBorrow() ? ValueKind.MUT_BORROW : ValueKind.IMM_BORROW;
         return isCopyType(type) ? ValueKind.COPY : ValueKind.MOVE_ONLY;
+    }
+
+    /**
+     * Static permission to deep-copy ordinary actor-owned data. This does
+     * not grant Copy (implicit aliasing): runtime rt copy must allocate a
+     * separate mutable graph. Unknown/imported host objects fail closed.
+     */
+    private boolean isDeepCopyableType(Ast.TypeRef type, Set<String> visitingClasses) {
+        if (type == null || type.isBorrow() || type.name().equals("$infer$")) return false;
+        if (type.isUnion() || type.isTupleType()) {
+            return type.arguments().stream().allMatch(t -> isDeepCopyableType(t, visitingClasses));
+        }
+        if (type.isRecordType()) {
+            return type.recordMembers().values().stream()
+                    .allMatch(t -> isDeepCopyableType(t, visitingClasses));
+        }
+        if (switch (type.name()) {
+            case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
+                    "f32","f64","float","decimal","complex64","complex128","complex",
+                    "bool","Bool","string","String","void" -> true;
+            default -> false;
+        }) return true;
+        if (type.name().equals("Array") || type.name().equals("List")
+                || type.name().equals("Vector") || type.name().equals("Slice")
+                || type.name().equals("Option")) {
+            return type.arguments().size() == 1
+                    && isDeepCopyableType(type.arguments().getFirst(), visitingClasses);
+        }
+        if (type.name().equals("Result")) {
+            return type.arguments().size() == 2
+                    && type.arguments().stream().allMatch(t -> isDeepCopyableType(t, visitingClasses));
+        }
+        Ast.ClassDecl klass = findClass(type.name());
+        if (klass == null || klass.actorKind() != Ast.ActorKind.NONE) return false;
+        if (!visitingClasses.add(klass.name())) return false;
+        try {
+            for (Ast.FieldDecl field : klass.fields()) {
+                if (!isDeepCopyableType(ownershipFieldType(field), visitingClasses)) return false;
+            }
+            return true;
+        } finally {
+            visitingClasses.remove(klass.name());
+        }
     }
 
     private boolean isCopyType(Ast.TypeRef type) {

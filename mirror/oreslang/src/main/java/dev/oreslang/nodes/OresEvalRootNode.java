@@ -5538,15 +5538,113 @@ public final class OresEvalRootNode extends RootNode {
 
         private Object applyRuntimeOwnership(String operation, Object value) {
             return switch (operation) {
-                // Borrow/take/share alter compiler ownership state, not the JVM handle.
-                case "borrow", "take", "share" -> value;
-                // Static ownership checking currently admits rt copy only for proven
-                // Copy values on this convergence branch, so returning the immutable
-                // scalar/value representation is an independent language-level copy.
-                case "copy" -> value;
+                // Take invalidates the source in the ownership pass, while
+                // borrow's lifetime is statically enforced by that same pass.
+                case "borrow", "take" -> value;
+                // Sharing mutable objects is still forbidden until the type
+                // system carries a deep immutable Shared<T> view.
+                case "share" -> value;
+                case "copy" -> deepCopyOwnedData(value, new IdentityHashMap<>(), 0,
+                        new int[]{0});
                 default -> throw new IllegalArgumentException(
                         "unknown runtime ownership operation 'rt " + operation + "'");
             };
+        }
+
+        /**
+         * Clone a complete guest-owned, acyclic data graph. Every collection
+         * and nominal class instance receives distinct mutable storage; no
+         * actor/namespace/capability can be smuggled into copied fields.
+         * Cycles and opaque host types fail closed instead of sharing an alias.
+         */
+        private Object deepCopyOwnedData(
+                Object value, IdentityHashMap<Object, Boolean> visiting,
+                int depth, int[] nodes) {
+            if (depth > 128 || ++nodes[0] > 100_000) {
+                throw new IllegalArgumentException("rt copy graph exceeds safe depth/node budget");
+            }
+            if (value == null || value instanceof String || value instanceof Boolean
+                    || value instanceof Number || value instanceof Character
+                    || value instanceof Complex || value instanceof OptionUnwrapError) {
+                return value; // Immutable scalar.
+            }
+            if (value instanceof ActorRuntime.ActorRef<?>
+                    || value instanceof ActorRuntime.Shared<?>
+                    || value instanceof ActorRuntime.SyncCell<?>
+                    || value instanceof OresMutex.Lock<?>
+                    || value instanceof ChannelRuntime.Channel<?>
+                    || value instanceof Invokable
+                    || value instanceof ModuleFacade || value instanceof ClassFacade
+                    || value instanceof HostObjectFacade || value instanceof HostClassFacade
+                    || value instanceof ImportedNamespace) {
+                throw new IllegalArgumentException("rt copy cannot duplicate actor, namespace, "
+                        + "callable or shared-memory capability");
+            }
+            if (visiting.put(value, Boolean.TRUE) != null) {
+                throw new IllegalArgumentException("rt copy does not support cyclic owned graphs");
+            }
+            try {
+                if (value instanceof OresObject object) {
+                    if (object.klass.actorKind() != Ast.ActorKind.NONE) {
+                        throw new IllegalArgumentException("rt copy cannot clone actor state");
+                    }
+                    LinkedHashMap<String, Object> fields = new LinkedHashMap<>();
+                    for (Map.Entry<String, Object> field : object.fields.entrySet()) {
+                        fields.put(field.getKey(),
+                                deepCopyOwnedData(field.getValue(), visiting, depth + 1, nodes));
+                    }
+                    return new OresObject(object.owner, object.klass, fields);
+                }
+                if (value instanceof OptionValue option) {
+                    return option.present()
+                            ? new OptionValue(true, deepCopyOwnedData(option.value(), visiting, depth + 1, nodes))
+                            : option;
+                }
+                if (value instanceof ResultValue result) {
+                    return new ResultValue(result.ok(),
+                            deepCopyOwnedData(result.value(), visiting, depth + 1, nodes));
+                }
+                if (value instanceof Map<?, ?> map) {
+                    LinkedHashMap<Object, Object> copy = new LinkedHashMap<>();
+                    for (Map.Entry<?, ?> field : map.entrySet()) {
+                        Object k = deepCopyOwnedData(field.getKey(), visiting, depth + 1, nodes);
+                        Object v = deepCopyOwnedData(field.getValue(), visiting, depth + 1, nodes);
+                        copy.put(k, v);
+                    }
+                    return value instanceof ReadonlyRecordValue
+                            ? new ReadonlyRecordValue((Map<String, Object>) (Map<?, ?>) copy)
+                            : copy;
+                }
+                if (value instanceof List<?> list) {
+                    ArrayList<Object> copy = new ArrayList<>(list.size());
+                    for (Object item : list) {
+                        copy.add(deepCopyOwnedData(item, visiting, depth + 1, nodes));
+                    }
+                    return copy;
+                }
+                if (value instanceof java.util.Set<?> set) {
+                    java.util.LinkedHashSet<Object> copy = new java.util.LinkedHashSet<>();
+                    for (Object item : set) {
+                        copy.add(deepCopyOwnedData(item, visiting, depth + 1, nodes));
+                    }
+                    return copy;
+                }
+                if (value.getClass().isArray()) {
+                    int length = java.lang.reflect.Array.getLength(value);
+                    Object arrayCopy = java.lang.reflect.Array.newInstance(
+                            value.getClass().getComponentType(), length);
+                    for (int i = 0; i < length; i++) {
+                        java.lang.reflect.Array.set(arrayCopy, i,
+                                deepCopyOwnedData(java.lang.reflect.Array.get(value, i),
+                                        visiting, depth + 1, nodes));
+                    }
+                    return arrayCopy;
+                }
+                throw new IllegalArgumentException("rt copy refuses opaque host type "
+                        + value.getClass().getName());
+            } finally {
+                visiting.remove(value);
+            }
         }
 
         private Object eval(Ast.Expr expr, Env env) {
