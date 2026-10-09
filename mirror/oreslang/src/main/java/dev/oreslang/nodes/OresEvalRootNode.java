@@ -801,6 +801,9 @@ public final class OresEvalRootNode extends RootNode {
                     || value instanceof Ast.ClassDecl
                     || value instanceof Ast.ModuleDecl
                     || value instanceof SharedCodeImageStore.CodeImage
+                    || value instanceof java.lang.Class<?>
+                    || (value instanceof HostObjectFacade host
+                        && host.value() instanceof java.lang.Class<?>)
                     || (value instanceof OresObject obj
                         && obj.klass.actorKind() != Ast.ActorKind.NONE)) {
                 throw new IllegalArgumentException(boundary
@@ -809,9 +812,16 @@ public final class OresEvalRootNode extends RootNode {
             }
             if (visiting.put(value, Boolean.TRUE) != null) return;
             try {
-                if (value instanceof OresObject obj) {
-                    for (Object field : obj.fields.values()) {
-                        requireOrdinaryCallableData(field, visiting, depth + 1, boundary);
+                if (value instanceof OresMutex.SharedState aggregate) {
+                    // Covers guest objects, records, Options, Results and
+                    // select result payloads; no hidden actor capability is
+                    // permitted inside nested guest data.
+                    for (Object child : aggregate.sharedStateChildren()) {
+                        requireOrdinaryCallableData(child, visiting, depth + 1, boundary);
+                    }
+                } else if (value instanceof java.util.Set<?> set) {
+                    for (Object child : set) {
+                        requireOrdinaryCallableData(child, visiting, depth + 1, boundary);
                     }
                 } else if (value instanceof List<?> list) {
                     for (Object child : list) {
