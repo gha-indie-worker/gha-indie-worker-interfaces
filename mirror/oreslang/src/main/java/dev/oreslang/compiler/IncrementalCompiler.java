@@ -62,6 +62,7 @@ public final class IncrementalCompiler {
         Map<String, Map<String, String>> normalizedImportResolutions =
                 normalizeImportResolutions(importResolutions);
         ImportGraph.validateLinkedImports(parsed, normalizedImportResolutions);
+        LinkedModuleContractChecker.check(parsed, normalizedImportResolutions);
         Map<String, Set<String>> dependencies =
                 ImportGraph.resolveDependencies(parsed, normalized.keySet(), normalizedImportResolutions);
         List<List<String>> initializationGroups = ImportGraph.initializationGroups(dependencies);

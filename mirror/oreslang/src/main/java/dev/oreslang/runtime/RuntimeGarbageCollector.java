@@ -217,7 +217,11 @@ public final class RuntimeGarbageCollector implements AutoCloseable {
                 throw new IllegalStateException("runtime cleanup registry limit exceeded: " + maxTracked);
             }
             Object actorDomain = ActorRuntime.currentActorExecutionDomain();
-            Object domain = actorDomain == null ? PROCESS_DOMAIN : actorDomain;
+            // Each supervisor/ROOT owns a deterministic cleanup scope just as
+            // each actor does. Physical carrier threads do not own resources.
+            Object schedulerDomain = OresScheduler.current();
+            Object domain = actorDomain != null ? actorDomain
+                    : schedulerDomain != null ? schedulerDomain : PROCESS_DOMAIN;
             Set<TrackedCleanup> domainEntries =
                     trackedByDomain.computeIfAbsent(domain, ignored -> ConcurrentHashMap.newKeySet());
             if (actorDomain != null && domainEntries.size() >= maxTrackedPerActor) {
@@ -258,6 +262,11 @@ public final class RuntimeGarbageCollector implements AutoCloseable {
      * or periodic sweeps. The per-actor registry cap bounds exit work.
      */
     public CollectionReport retireActorDomain(Object actorDomain) {
+        return retireProcessDomain(actorDomain);
+    }
+
+    /** Retire an actor, supervisor or ROOT resource scope without explicit gc(). */
+    public CollectionReport retireProcessDomain(Object actorDomain) {
         Objects.requireNonNull(actorDomain, "actorDomain");
         synchronized (lifecycleLock) {
             ensureOpen();

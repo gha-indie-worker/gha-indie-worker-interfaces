@@ -1,6 +1,10 @@
 package dev.oreslang.runtime;
 
 import java.util.Objects;
+import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Supplier;
+import java.util.function.Consumer;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +41,16 @@ public final class OresVM implements AutoCloseable {
     private final Executor processAdmission;
     private final OresScheduler.TurnExecutor guestTurnAdmission;
     private final Set<OresScheduler> supervisorSchedulers = ConcurrentHashMap.newKeySet();
+    /** Mutable module cells scoped to a supervisor's serialized guest lane. */
+    private final ConcurrentMap<OresScheduler, Map<SupervisorModuleKey, Object>>
+            supervisorModuleStates = new ConcurrentHashMap<>();
+    private volatile Consumer<Object> supervisorExitHook = ignored -> { };
+
+    /** Install GC/resource-domain retirement after the context initializes. */
+    public void setSupervisorExitHook(Consumer<Object> hook) {
+        supervisorExitHook = Objects.requireNonNull(hook);
+    }
+    private record SupervisorModuleKey(String codeUnitId, String moduleName, long generation) { }
     private final AtomicLong nextSupervisorId = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile StartupState startupState = StartupState.NEW;
@@ -201,13 +215,41 @@ public final class OresVM implements AutoCloseable {
                 guestTurnAdmission);
         try {
             processTimers.register(supervisor);
-            supervisor.onClose(() -> processTimers.closeScope(supervisor));
+            supervisor.onClose(() -> {
+                processTimers.closeScope(supervisor);
+                // Drop the entire mutable state graph at process retirement.
+                supervisorModuleStates.remove(supervisor);
+                supervisorExitHook.accept(supervisor);
+            });
         } catch (RuntimeException | Error failed) {
             supervisor.close();
             throw failed;
         }
         supervisorSchedulers.add(supervisor);
         return supervisor;
+    }
+
+    /**
+     * Return an isolated module-state cell for the CURRENT supervisor turn.
+     * Guest code and field initializers do not execute under VM global locks;
+     * the scheduler's single-flight contract guards its state map.
+     */
+    public Object currentSupervisorModuleState(
+            String codeUnitId, String moduleName, long generation,
+            Supplier<Object> initializer) {
+        Objects.requireNonNull(codeUnitId, "codeUnitId");
+        Objects.requireNonNull(moduleName, "moduleName");
+        Objects.requireNonNull(initializer, "initializer");
+        if (generation <= 0L) throw new IllegalArgumentException("invalid code generation");
+        OresScheduler owner = OresScheduler.current();
+        if (closed.get() || owner == null || !supervisorSchedulers.contains(owner)) {
+            throw new SecurityException("supervisor module state requires an admitted supervisor guest turn");
+        }
+        Map<SupervisorModuleKey, Object> cells = supervisorModuleStates.computeIfAbsent(
+                owner, ignored -> new ConcurrentHashMap<>());
+        // Map is safe across carriers; each owner still has one active turn.
+        return cells.computeIfAbsent(new SupervisorModuleKey(codeUnitId, moduleName, generation),
+                ignored -> initializer.get());
     }
 
     /** Schedule process-owned timeouts; timer workers never execute user code. */
@@ -284,6 +326,7 @@ public final class OresVM implements AutoCloseable {
                     supervisor.close();
                 }
                 supervisorSchedulers.clear();
+        supervisorModuleStates.clear();
             } finally {
                 try {
                     controlScheduler.close();

@@ -803,6 +803,15 @@ public final class OwnershipChecker {
                             ownershipRoot(owner));
                 }
                 case "take" -> {
+                    // Consuming an indexed/member expression currently returns its
+                    // value without clearing the original storage slot. That is an
+                    // alias, not a move. Until place-expression moves have an
+                    // atomic remove/uninitialize lowering, accept named owners only.
+                    if (!(argument instanceof Ast.NameExpr)) {
+                        throw error("rt take requires a named owned binding; field/index"
+                                + " ownership transfer is unsupported until the source slot"
+                                + " can be invalidated");
+                    }
                     ValueInfo taken = checkExpr(argument, scope, true);
                     if (taken.kind == ValueKind.IMM_BORROW || taken.kind == ValueKind.MUT_BORROW
                             || (taken.type != null && taken.type.isBorrow())) {
@@ -831,12 +840,15 @@ public final class OwnershipChecker {
                 }
                 case "share" -> {
                     ValueInfo source = checkExpr(argument, scope, false);
-                    if (source.kind != ValueKind.COPY) {
-                        throw error(
-                                "rt share of move-only values requires the owning Shared<T> convergence; "
-                                        + "this current-main patch fails closed instead of manufacturing shared mutable aliasing");
+                    if (!isDeepCopyableType(source.type, new HashSet<>())) {
+                        throw error("rt share requires proven owned, acyclic, data-only types; "
+                                + "borrows, actors, opaque host objects and executable capabilities are forbidden");
                     }
-                    yield source;
+                    if (isCopyType(source.type)) yield source;
+                    // A runtime-frozen snapshot is a Copy-like readonly view,
+                    // not an owned mutable alias to the original graph.
+                    yield new ValueInfo(new Ast.TypeRef("Readonly",
+                            List.of(source.type), false), ValueKind.COPY, null);
                 }
                 default -> throw error("unknown runtime operation 'rt " + runtime.operation() + "'");
             };
@@ -1681,6 +1693,9 @@ public final class OwnershipChecker {
         if (receiver instanceof Ast.NameExpr name) {
             VarState state = requireState(scope, name.name());
             requireUsable(state, name.name(), true);
+            if (state.type.name().equals("Readonly")) {
+                throw error("cannot mutate deeply readonly rt share snapshot '" + name.name() + "'");
+            }
             if (state.type.isReadonlyRecordType()) {
                 throw error("cannot mutate infer struct value '" + name.name()
                         + "'; inferred structs are closed and readonly");
@@ -3134,6 +3149,9 @@ public final class OwnershipChecker {
 
     private boolean isCopyType(Ast.TypeRef type) {
         if (type == null || type.isBorrow()) return false;
+        if (type.name().equals("Readonly")) {
+            return type.arguments().size() == 1;
+        }
         if (type.isUnion()) return type.arguments().stream().allMatch(this::isCopyType);
         if (type.isTupleType()) return type.arguments().stream().allMatch(this::isCopyType);
         return switch (type.name()) {

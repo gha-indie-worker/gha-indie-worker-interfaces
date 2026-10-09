@@ -1286,9 +1286,11 @@ public final class ActorRuntime implements AutoCloseable {
      * initializers execute later on this actor's turn, never under a core lock.
      */
     public Object currentActorModuleState(
-            String codeUnitId, String moduleName, Supplier<Object> factory) {
+            String codeUnitId, String moduleName, long generation,
+            Supplier<Object> factory) {
         Objects.requireNonNull(codeUnitId, "codeUnitId");
         Objects.requireNonNull(moduleName, "moduleName");
+        if (generation <= 0L) throw new IllegalArgumentException("module code generation must be positive");
         Objects.requireNonNull(factory, "factory");
         ActorCell<?> cell = currentActor.get();
         if (cell == null || currentActorRuntime() != this
@@ -1297,11 +1299,11 @@ public final class ActorRuntime implements AutoCloseable {
                     "module state can only be accessed from its owning actor guest turn");
         }
         return cell.moduleStates.computeIfAbsent(
-                new ModuleStateKey(codeUnitId, moduleName),
+                new ModuleStateKey(codeUnitId, moduleName, generation),
                 ignored -> Objects.requireNonNull(factory.get(), "module state"));
     }
 
-    private record ModuleStateKey(String codeUnitId, String moduleName) { }
+    private record ModuleStateKey(String codeUnitId, String moduleName, long generation) { }
 
     public ContinuationTarget captureCurrentContinuationTarget() {
         ActorCell<?> cell = currentActor.get();

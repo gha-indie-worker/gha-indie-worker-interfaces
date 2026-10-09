@@ -111,6 +111,7 @@ public final class OresContext implements AutoCloseable {
             async = new AsyncRuntime(this::executeAsyncTurn);
             gc = new RuntimeGarbageCollector();
             actors.setActorExitHook(gc::retireActorDomain);
+            vm.setSupervisorExitHook(gc::retireProcessDomain);
             if (java.util.Arrays.asList(env.getApplicationArguments()).contains("--warm")) {
                 actors.warmActorPools();
             }
@@ -354,9 +355,9 @@ public final class OresContext implements AutoCloseable {
         try {
             return awaitHostRootTask(task);
         } finally {
-            // Returning main is a process-lifetime boundary. A plain timer
-            // registration is NOT an implicit keepalive reference.
+            // Deterministic scope teardown: no explicit process.gc() needed.
             vm.finishRootMain();
+            garbageCollector.retireProcessDomain(vm.rootScheduler());
         }
     }
 

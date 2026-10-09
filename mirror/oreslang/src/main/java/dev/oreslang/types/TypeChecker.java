@@ -1794,6 +1794,13 @@ public final class TypeChecker {
             return Primitive.BOOL;
         }
         if (expr instanceof Ast.CastExpr cast) {
+            if (cast.targetType().name().equals("Readonly")) {
+                throw new IllegalArgumentException("Readonly<T> cannot be forged by a cast; use rt share");
+            }
+            Type castSource = deref(typeOf(cast.value(), env, generics, self));
+            if (castSource instanceof Named ro && ro.name().equals("Readonly")) {
+                throw new IllegalArgumentException("rt share readonly capability cannot be erased by a cast");
+            }
             requireRuntimeReifiableType(cast.targetType(), cast.mode() == Ast.CastMode.OPTIONAL ? "as?" : "as");
             Type source = deref(typeOf(cast.value(), env, generics, self));
             Type target = deref(resolve(cast.targetType(), generics, self));
@@ -1921,7 +1928,15 @@ public final class TypeChecker {
             Type operand = typeOf(runtime.arguments().getFirst(), env, generics, self);
             return switch (runtime.operation()) {
                 case "borrow" -> new Borrow(operand, false);
-                case "copy", "take", "share" -> operand;
+                case "copy", "take" -> operand;
+                case "share" -> {
+                    if (!isSharedSafe(operand, new LinkedHashSet<>(), Map.of())) {
+                        throw new IllegalArgumentException(
+                                "rt share requires a statically safe data-only value");
+                    }
+                    yield operand instanceof Primitive || operand instanceof StringLiteral
+                            ? operand : new Named("Readonly", List.of(operand));
+                }
                 default -> throw new IllegalArgumentException(
                         "unknown runtime ownership operation 'rt " + runtime.operation() + "'");
             };
@@ -2702,6 +2717,10 @@ public final class TypeChecker {
             return fn.result();
         }
         if (expr instanceof Ast.MemberExpr member) {
+            Type guardedReceiver = deref(typeOf(member.receiver(), env, generics, self));
+            if (guardedReceiver instanceof Named ro && ro.name().equals("Readonly")) {
+                return readonlyMemberType(ro.arguments().getFirst(), member.member());
+            }
             if (member.receiver() instanceof Ast.NameExpr namespace
                     && namespace.name().equals("BooleanOps")
                     && !modules.containsKey("BooleanOps")
@@ -2976,6 +2995,20 @@ public final class TypeChecker {
         if (expr instanceof Ast.IndexExpr indexed) {
             Type receiver = deref(typeOf(indexed.receiver(), env, generics, self));
             Type index = typeOf(indexed.index(), env, generics, self);
+            if (receiver instanceof Named ro && ro.name().equals("Readonly")) {
+                Type underlying = ro.arguments().getFirst();
+                if (underlying instanceof ListType list) {
+                    requireAssignable(index, Primitive.INT, "readonly array index");
+                    return readonlyProjection(list.element());
+                }
+                if (underlying instanceof Tuple tuple) {
+                    requireAssignable(index, Primitive.INT, "readonly tuple index");
+                    return readonlyProjection(tuple.elements().stream()
+                            .reduce(Unknown.INSTANCE, this::commonType));
+                }
+                throw new IllegalArgumentException(
+                        "readonly indexing requires an array or tuple");
+            }
             if (receiver instanceof Record record) {
                 requireAssignable(index, Primitive.STRING, "object/map key");
                 if (index instanceof StringLiteral key) {
@@ -2995,6 +3028,9 @@ public final class TypeChecker {
                     "indexing requires an array/list, tuple, or closed struct with a statically known string key");
         }
         if (expr instanceof Ast.NewExpr created) {
+            if (created.type().name().equals("Readonly")) {
+                throw new IllegalArgumentException("Readonly<T> cannot be constructed; use rt share");
+            }
             if (created.type().name().equals("DynamicStruct")) {
                 throw new IllegalArgumentException(
                         "DynamicStruct has been removed; use infer struct{...}, "
@@ -4227,6 +4263,39 @@ public final class TypeChecker {
         };
     }
 
+    /** A readonly capability is preserved through every non-scalar projection. */
+    private static Type readonlyProjection(Type inner) {
+        if (inner instanceof Primitive || inner instanceof StringLiteral) return inner;
+        if (inner instanceof Named named && named.name().equals("Readonly")) return inner;
+        return new Named("Readonly", List.of(inner));
+    }
+
+    private Type readonlyMemberType(Type inner, String name) {
+        if (inner instanceof ListType || inner instanceof Tuple) {
+            if (name.equals("size") || name.equals("length")) return Primitive.INT;
+            throw new IllegalArgumentException("deeply readonly list exposes only size/length and indexing");
+        }
+        if (inner instanceof Record record) {
+            Type field = record.members().get(name);
+            if (field == null) throw new IllegalArgumentException("unknown readonly record field " + name);
+            return readonlyProjection(field);
+        }
+        if (inner instanceof Named named) {
+            Ast.ClassDecl klass = findClass(named.name());
+            if (klass != null && klass.actorKind() == Ast.ActorKind.NONE) {
+                ResolvedField field = findFieldTarget(klass, named, name, new LinkedHashSet<>());
+                if (field == null || field.field().visibility() != Ast.Visibility.PUBLIC) {
+                    throw new IllegalArgumentException("readonly class exposes public fields only: " + name);
+                }
+                Type fieldType = resolve(field.field().type(),
+                        Set.copyOf(field.owner().genericParameters()), field.ownerType());
+                return readonlyProjection(substituteGenerics(fieldType,
+                        classGenericBindings(field.owner(), field.ownerType())));
+            }
+        }
+        throw new IllegalArgumentException("unsupported deeply readonly member " + name);
+    }
+
     private Type memberType(Ast.MemberExpr member, Env env, Set<String> generics, Type self) {
         return memberType(member, env, generics, self, false);
     }
@@ -4258,6 +4327,12 @@ public final class TypeChecker {
                         "module field '" + name.name() + "." + member.member()
                                 + "' is not a public mutable let binding");
             }
+        }
+        Type directReceiver = deref(typeOf(member.receiver(), env, generics, self));
+        if (directReceiver instanceof Named named && named.name().equals("Readonly")) {
+            if (writing) throw new IllegalArgumentException(
+                    "cannot assign through deeply readonly rt share snapshot");
+            return readonlyMemberType(named.arguments().getFirst(), member.member());
         }
         Type rawReceiver;
         if (member.receiver() instanceof Ast.NameExpr name && env.lookup(name.name()) != null) {
@@ -6938,6 +7013,13 @@ public final class TypeChecker {
         }
 
         return switch (ref.name()) {
+            case "Readonly" -> {
+                if (ref.arguments().size() != 1 || ref.inferArguments()) {
+                    throw new IllegalArgumentException("Readonly<T> requires one owned type");
+                }
+                yield new Named("Readonly", List.of(
+                        resolve(ref.arguments().getFirst(), generics, self)));
+            }
             case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "bigint" -> Primitive.INT;
             case "f32", "f64", "float" -> Primitive.FLOAT;
             case "decimal" -> Primitive.DECIMAL;

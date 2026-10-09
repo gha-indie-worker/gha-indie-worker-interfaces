@@ -34,7 +34,7 @@ final class ActorModuleStateOwnershipTest {
                 Probe p = probe;
                 @SuppressWarnings("unchecked")
                 List<String> state = (List<String>) p.runtime.currentActorModuleState(
-                        "pkg/shared.ores", "M", () -> {
+                        "pkg/shared.ores", "M", 1L, () -> {
                             p.allocations.incrementAndGet();
                             return new ArrayList<String>();
                         });
@@ -51,10 +51,10 @@ final class ActorModuleStateOwnershipTest {
                     assertEquals(List.of(turn.self().id().toString()), state);
                     // Unit qualification is part of state identity.
                     Object other = p.runtime.currentActorModuleState(
-                            "pkg/other.ores", "M", ArrayList<String>::new);
+                            "pkg/other.ores", "M", 1L, ArrayList<String>::new);
                     assertNotSame(state, other);
                     Object nextModule = p.runtime.currentActorModuleState(
-                            "pkg/shared.ores", "Other", ArrayList<String>::new);
+                            "pkg/shared.ores", "Other", 1L, ArrayList<String>::new);
                     assertNotSame(state, nextModule);
                     turn.self().stop();
                 } else {
@@ -101,7 +101,7 @@ final class ActorModuleStateOwnershipTest {
         try (ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer())) {
             assertThrows(SecurityException.class,
                     () -> runtime.currentActorModuleState(
-                            "pkg/shared.ores", "M", ArrayList<String>::new));
+                            "pkg/shared.ores", "M", 1L, ArrayList<String>::new));
         }
     }
 }
