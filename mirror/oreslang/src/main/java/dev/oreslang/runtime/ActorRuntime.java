@@ -1796,6 +1796,20 @@ public final class ActorRuntime implements AutoCloseable {
         @Override public OresFuture<Void> getAwaited() { return actor.ready(); }
     }
 
+    /**
+     * Stable actor-completion signal. Unlike a one-shot channel read, observing
+     * completion never consumes a message: every waiter (including a late
+     * waiter) sees the same finalization result or terminal failure.
+     *
+     * This is observer-only. Cancelling a waiter cannot cancel the actor or
+     * change its terminal state; the runtime alone settles completion.
+     */
+    public final class ActorDoneSignal implements Awaitable<Void> {
+        private final ActorRef<?> actor;
+        private ActorDoneSignal(ActorRef<?> actor) { this.actor = actor; }
+        @Override public OresFuture<Void> getAwaited() { return actor.done(); }
+    }
+
     public final class ActorRef<M> {
         private final ActorId id;
         private final ActorKind kind;
@@ -1807,6 +1821,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final ActorReadySignal readySignal = new ActorReadySignal(this);
         private final OresFuture<Void> doneFuture =
                 new OresFuture<>(() -> false, () -> { });
+        private final ActorDoneSignal doneSignal = new ActorDoneSignal(this);
         private volatile ActorOutputStream<Object> outputStream;
 
         private ActorRef(ActorId id, ActorKind kind) {
@@ -1850,6 +1865,19 @@ public final class ActorRuntime implements AutoCloseable {
          */
         public OresFuture<Void> done() {
             return doneFuture;
+        }
+
+        /**
+         * Stable lifecycle API symmetric with getReadySignal(). The signal
+         * settles after actor finalization and TurnExecutor exit, not merely
+         * when self.end() is called or the last mailbox message completes.
+         * Failure, cancellation and late waits observe the original outcome.
+         *
+         * Unlike getReadySignal(), observing done does not implicitly schedule
+         * actor initialization, preserving the existing done() semantics.
+         */
+        public ActorDoneSignal getDoneSignal() {
+            return doneSignal;
         }
 
         /** Read-only outputs emitted by actor-local self.send(...). */
