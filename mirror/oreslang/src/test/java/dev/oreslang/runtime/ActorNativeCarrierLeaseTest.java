@@ -84,6 +84,48 @@ final class ActorNativeCarrierLeaseTest {
     }
 
     @Test
+    void distinctMailsInSameActorHaveDistinctRequestPrincipalEvenOnOneCarrier() throws Exception {
+        for (ActorRuntime.ActorKind kind : ActorRuntime.ActorKind.values()) {
+            List<Long> seenSequences = new CopyOnWriteArrayList<>();
+            try (SharedCodeImageStore store = new SharedCodeImageStore();
+                 ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer())) {
+                var image = store.publish("message-principal-" + kind + ".ores",
+                        Parser.parse("pub routine main(): void { return; }"));
+                ActorRuntime.ActorCodeExecutor executor = new ActorRuntime.ActorCodeExecutor() {
+                    @Override public SharedCodeImageStore.CodeImage codeImage() { return image; }
+                    @Override public ActorRuntime.ActorOwnedGuestState initializeActor(
+                            String type, ActorRuntime.ActorContext<Object> ctx) {
+                        assertTrue(ActorRuntime.currentActorMailSequence().isEmpty(),
+                                "startup must not acquire any request's identity");
+                        return ctx.self()::id;
+                    }
+                    @Override public void receiveActor(
+                            String type, ActorRuntime.ActorOwnedGuestState state,
+                            ActorRuntime.ActorInboxMail<Object> mail,
+                            ActorRuntime.ActorContext<Object> ctx) {
+                        assertTrue(ActorRuntime.currentThreadOwnsActorNativeLease());
+                        assertEquals(mail.sequence(), ActorRuntime.currentActorMailSequence().orElseThrow());
+                        assertTrue(ActorRuntime.currentActorMailCarries(mail.value()));
+                        assertFalse(ActorRuntime.currentActorMailCarries("someone-else-request"));
+                        seenSequences.add(mail.sequence());
+                        if (seenSequences.size() == 2) ctx.self().stop();
+                    }
+                };
+                var actor = runtime.spawnCodeActor(kind, executor, "Worker");
+                actor.ready().get(5, TimeUnit.SECONDS);
+                actor.send("request-1-token");
+                actor.send("request-2-token");
+                assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+                assertTrue(actor.failure().isEmpty(), actor.failure().toString());
+                assertEquals(2, seenSequences.size());
+                assertNotEquals(seenSequences.get(0), seenSequences.get(1));
+                assertTrue(ActorRuntime.currentActorMailSequence().isEmpty(),
+                        "carrier-local request context must not leak to the host");
+            }
+        }
+    }
+
+    @Test
     void sharedSyncCellRequiresLiveNativeActorLeaseForReadAndUpdate() throws Exception {
         try (ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer())) {
             ActorRuntime.SyncCell<Integer> cell = runtime.syncCell(0);
