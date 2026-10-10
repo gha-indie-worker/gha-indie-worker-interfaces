@@ -1,0 +1,7 @@
+// Oreslang REST route module contract. Canonical source:
+// oresoftware/ores-interfaces/contracts/oreslang-route/v1/RouteContract.ores
+// A concrete Route module must implement both signatures.
+define contract RouteContract as
+  fnc get(String request) => String;
+  fnc post(String request) => String;
+end
