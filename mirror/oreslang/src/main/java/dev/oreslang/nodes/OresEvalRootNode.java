@@ -6429,6 +6429,15 @@ public final class OresEvalRootNode extends RootNode {
                             throw new IllegalArgumentException("dispatch requires HTTP exchange");
                         handler.dispatch(exchange); return null;
                     };
+                    case "dispatch_to" -> (Invokable) args -> {
+                        if (args.size() != 2 || !(args.get(0) instanceof NativeHttp.Exchange exchange)
+                                || !(args.get(1) instanceof ActorRuntime.ActorRef<?> ref))
+                            throw new IllegalArgumentException("dispatch_to requires HTTP exchange and actor reference");
+                        @SuppressWarnings("unchecked")
+                        ActorRuntime.ActorRef<Object> actor = (ActorRuntime.ActorRef<Object>) ref;
+                        handler.dispatchTo(exchange, actor);
+                        return null;
+                    };
                     default -> throw new IllegalArgumentException("unknown HTTP handler member " + name);
                 };
             }
@@ -6488,6 +6497,11 @@ public final class OresEvalRootNode extends RootNode {
                         if (args.size() != 1 || !(args.get(0) instanceof ActorRuntime.ActorRef<?> ref))
                             throw new IllegalArgumentException("move_to requires actor reference");
                         return exchange.moveTo(ref);
+                    };
+                    case "move_to_reusable" -> (Invokable) args -> {
+                        if (args.size() != 1 || !(args.get(0) instanceof ActorRuntime.ActorRef<?> ref))
+                            throw new IllegalArgumentException("move_to_reusable requires actor reference");
+                        return exchange.moveToReusable(ref);
                     };
                     case "read_chunk" -> (Invokable) args -> {
                         if (args.size() != 1) throw new IllegalArgumentException("read_chunk requires maximum byte count");
