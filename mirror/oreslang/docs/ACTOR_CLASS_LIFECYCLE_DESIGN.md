@@ -32,6 +32,18 @@ public type is an `Awaitable`; an internal Future or channel/notification
 implementation may change without changing source call sites. `actor.done`
 remains a compatibility property.
 
+**Hardening contract:** `ReadySignal<T>` and `DoneSignal<T>` are
+actor-lifecycle observation capabilities, not plain serializable values.
+They cannot be passed through actor mailboxes or across an independent async
+task boundary, and actor classes cannot override `get_ready_signal` or
+`get_done_signal` as instance methods. `await` projects an
+`Awaitable<T>` to an internal Future but rejects a value that is not actually
+awaitable at runtime. The already-settled Future path resolves first, then
+invokes the continuation **once**, without retrying downstream code if it
+throws. A done signal remains pending until guest cleanup and the
+TurnExecutor context-exit boundary have finished; it does not imply that
+a caller may cancel or start the actor.
+
 ## Target `main.ores` (partially implemented end-to-end target)
 
 ```ores
