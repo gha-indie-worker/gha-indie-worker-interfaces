@@ -1365,6 +1365,38 @@ public final class ActorRuntime implements AutoCloseable {
 
     private record ModuleStateKey(String codeUnitId, String moduleName, long generation) { }
 
+    /**
+     * Per-message principal for request/connection endpoint authorization.
+     * This is not the actor ID: one actor may be processing several suspended
+     * requests, each with a different response stream. Only an admitted native
+     * turn can observe its currently resumed source message.
+     */
+    public static Optional<Long> currentActorMailSequence() {
+        if (!currentThreadOwnsActorNativeLease()) return Optional.empty();
+        ActorExecutionContext execution = CURRENT_ACTOR_EXECUTION.get();
+        ActorCell<?> cell = execution.runtime().currentActor.get();
+        ActorInboxMail<?> mail = cell.activeMail;
+        if (mail == null) return Optional.empty();
+        synchronized (cell.lifecycleLock) {
+            if (cell.stopped.get() || cell.sourceMessages.get(mail.sequence()) != mail) {
+                return Optional.empty();
+            }
+            return Optional.of(mail.sequence());
+        }
+    }
+
+    /**
+     * Transport transfer tickets must be claimed by the very mailbox message
+     * that delivered them. A peer message in the same actor cannot claim a
+     * ticket merely because it has the same actor-wide identity.
+     */
+    static boolean currentActorMailCarries(Object token) {
+        if (currentActorMailSequence().isEmpty()) return false;
+        ActorExecutionContext execution = CURRENT_ACTOR_EXECUTION.get();
+        ActorInboxMail<?> mail = execution.runtime().currentActor.get().activeMail;
+        return mail != null && Objects.equals(mail.value(), token);
+    }
+
     public ContinuationTarget captureCurrentContinuationTarget() {
         ActorCell<?> cell = currentActor.get();
         if (cell == null) {
