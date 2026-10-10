@@ -70,6 +70,17 @@ jobs:
         run: npm run validate:fixtures:builtin
       - name: Fixtures — ajv 2020-12
         run: node scripts/validate-fixtures.mjs --engine ajv
+      - name: Set up Java for mirrored Oreslang
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Run exact-source Oreslang JVM ownership regressions
+        if: github.event_name == 'pull_request'
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=ActorModuleStateOwnershipTest,ModuleFieldOwnershipTest,ActorConcurrentMailboxExecutionTest,ActorNativeCarrierLeaseTest,ActorMailboxExecutionBoundaryTest,ActorCarrierIdentityCleanupTest,ActorGroupMailmanTest,SourceActorSpawnExecutionTest,ActorCooperateOrderingTest,ActorSharedMailboxAccountingTest,ActorStructuredCancellationTest,SupervisorModuleGenerationTest,RtShareReadonlyProjectionTest,LinkedModuleContractEnforcementTest,ActorCallableValueBoundaryTest,PointerlessFncOwnershipTest,ActorImmutableSharedTransportTest,ActorSharedCodeImageWhitelistTest,SharedActorSingleFlightContractTest test
 
   rust-witness:
     needs: parity

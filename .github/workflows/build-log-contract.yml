@@ -89,3 +89,11 @@ jobs:
         run: rustfmt --edition 2021 --config skip_children=true --check src/build_log_metadata.rs src/lib.rs
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Validate exact mirrored Oreslang JVM runtime
+        run: |
+          cd mirror/oreslang
+          mvn -B -P '!native-thread-unix' -Dores.runtime.carriers=java -Dtest=OresVMTest,SerialProcessExecutorTest,ProcessTurnTraceTest,ProcessTimerServiceTest,RootEventLoopRefinementTest,ActorSharedCodeImageWhitelistTest,SharedCodeImageStoreTest test
