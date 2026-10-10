@@ -52,6 +52,35 @@ final class SerialProcessExecutorTest {
     }
 
     @Test
+    void rejectedFatalDrainRetryNotifiesAllAcceptedGuestTasks() {
+        var carriers = new ArrayList<Runnable>();
+        var submissions = new AtomicInteger();
+        java.util.concurrent.Executor physical = command -> {
+            if (submissions.incrementAndGet() > 1) {
+                throw new RejectedExecutionException("carrier shutdown");
+            }
+            carriers.add(command);
+        };
+        var executor = new SerialProcessExecutor(physical, 4);
+        var failures = new ArrayList<Throwable>();
+        var accidentallyExecuted = new AtomicInteger();
+        executor.execute(() -> { throw new LinkageError("fatal running turn"); });
+        for (int i = 0; i < 2; i++) {
+            executor.execute(new SerialProcessExecutor.RejectionAwareTurn() {
+                @Override public void run() { accidentallyExecuted.incrementAndGet(); }
+                @Override public void reject(Throwable failure) { failures.add(failure); }
+            });
+        }
+        assertThrows(LinkageError.class, () -> carriers.removeFirst().run());
+        assertEquals(2, failures.size(), "all accepted but stranded tasks must settle");
+        assertTrue(failures.stream().allMatch(RejectedExecutionException.class::isInstance));
+        assertEquals(0, accidentallyExecuted.get(),
+                "rejected callbacks must not run guest turns on the producer");
+        assertThrows(RejectedExecutionException.class,
+                () -> executor.execute(accidentallyExecuted::incrementAndGet));
+    }
+
+    @Test
     void fatalTurnDoesNotOrphanAlreadyAcceptedTurns() {
         var admitted = new ArrayList<Runnable>();
         var process = new SerialProcessExecutor(admitted::add, 2);
