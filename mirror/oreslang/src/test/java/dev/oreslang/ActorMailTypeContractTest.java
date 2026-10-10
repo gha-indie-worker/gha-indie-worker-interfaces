@@ -67,6 +67,65 @@ final class ActorMailTypeContractTest {
     }
 
     @Test
+    void actorInstancesCannotOverrideRuntimeLifecycleSignalNames() {
+        for (String method : new String[] {"get_ready_signal", "get_done_signal"}) {
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(Parser.parse("""
+                            define actor Worker as
+                              %s(): void { return; }
+                              receive(ActorMail<String> mail): void { return; }
+                            end
+                            """.formatted(method))));
+            assertTrue(failure.getMessage().contains("reserved"),
+                    failure.getMessage());
+        }
+        // Reserved only on actors: ordinary classes can choose these names.
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                define class Ordinary as
+                  get_done_signal(): void { return; }
+                end
+                """)));
+    }
+
+    @Test
+    void actorSignalMethodsAreNotProperties() {
+        for (String member : new String[] {"get_ready_signal", "get_done_signal"}) {
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(Parser.parse("""
+                            define actor Worker as
+                              receive(ActorMail<String> mail): void { return; }
+                            end
+                            pub async routine main(): void {
+                              val worker = spawn Worker();
+                              val signal = worker.%s;
+                              return;
+                            }
+                            """.formatted(member))));
+            assertTrue(failure.getMessage().contains("direct-call-only"),
+                    failure.getMessage());
+        }
+    }
+
+    @Test
+    void lifecycleSignalsAreObserverCapabilitiesNotActorMailPayloads() {
+        for (String signal : new String[] {"ReadySignal", "DoneSignal"}) {
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(Parser.parse("""
+                            define actor Subscriber as
+                              receive(ActorMail<%s<void>> mail): void {
+                                return;
+                              }
+                            end
+                            """.formatted(signal))));
+            assertTrue(failure.getMessage().contains(signal),
+                    failure.getMessage());
+        }
+    }
+
+    @Test
     void actorRefSendMustMatchReceivePayload() {
         IllegalArgumentException failure = assertThrows(
                 IllegalArgumentException.class,
