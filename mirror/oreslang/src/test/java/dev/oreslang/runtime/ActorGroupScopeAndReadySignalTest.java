@@ -93,6 +93,46 @@ final class ActorGroupScopeAndReadySignalTest {
     }
 
     @Test
+    void doneSignalsAreStableNonConsumableAndObserveFinalization() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var actor = runtime.spawnShared(
+                    () -> (String message, ActorRuntime.ActorContext<String> ctx) -> {
+                        ctx.self().stop();
+                    });
+            var ready = actor.getReadySignal();
+            var done = actor.getDoneSignal();
+            assertSame(done, actor.getDoneSignal(), "each actor has one stable done signal");
+            assertNotSame(ready, done, "ready and done are distinct lifecycle milestones");
+            assertSame(done.getAwaited(), actor.done(), "done signal projects existing completion");
+            assertFalse(done.getAwaited().isDone(), "not done before actor finalization");
+            ready.getAwaited().get(5, TimeUnit.SECONDS);
+            assertFalse(done.getAwaited().isDone(), "ready does not imply done");
+            actor.send("end");
+            done.getAwaited().get(5, TimeUnit.SECONDS);
+            assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+            actor.getDoneSignal().getAwaited().get(5, TimeUnit.SECONDS);
+            assertSame(done, actor.getDoneSignal(), "late observer sees the same signal");
+        }
+    }
+
+    @Test
+    void doneSignalPropagatesFailureToAllAndLateWaiters() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            ActorRuntime.ActorRef<String> failed = runtime.spawnShared(
+                    () -> { throw new IllegalStateException("failed actor initialization"); });
+            var done = failed.getDoneSignal();
+            var ready = failed.getReadySignal();
+            assertThrows(ExecutionException.class,
+                    () -> ready.getAwaited().get(5, TimeUnit.SECONDS));
+            assertThrows(ExecutionException.class,
+                    () -> done.getAwaited().get(5, TimeUnit.SECONDS));
+            assertThrows(ExecutionException.class,
+                    () -> failed.getDoneSignal().getAwaited().get(5, TimeUnit.SECONDS));
+            assertSame(done, failed.getDoneSignal());
+        }
+    }
+
+    @Test
     void readinessFailureStaysFailedForLateWaiters() throws Exception {
         try (ActorRuntime runtime = new ActorRuntime()) {
             ActorRuntime.ActorRef<String> broken = runtime.spawnShared(
