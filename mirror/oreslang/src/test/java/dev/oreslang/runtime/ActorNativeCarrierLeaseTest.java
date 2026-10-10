@@ -84,6 +84,35 @@ final class ActorNativeCarrierLeaseTest {
     }
 
     @Test
+    void sharedSyncCellRequiresLiveNativeActorLeaseForReadAndUpdate() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer())) {
+            ActorRuntime.SyncCell<Integer> cell = runtime.syncCell(0);
+            // The host may snapshot frozen data; mutation/read callbacks are
+            // actor code and must never run without the caller's carrier lease.
+            assertThrows(IllegalStateException.class, () -> cell.read(value -> value));
+            assertThrows(IllegalStateException.class, () -> cell.update(value -> value + 1));
+
+            AtomicInteger callbacks = new AtomicInteger();
+            var actor = runtime.<Integer>spawnShared(() -> (message, context) -> {
+                assertTrue(ActorRuntime.currentThreadOwnsActorNativeLease());
+                assertEquals(message, cell.update(value -> value + 1));
+                assertEquals(message, cell.read(value -> value));
+                callbacks.incrementAndGet();
+                if (message == 2) context.self().stop();
+            });
+            actor.send(1);
+            actor.send(2);
+            assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+            assertTrue(actor.failure().isEmpty(), actor.failure().toString());
+            assertEquals(2, callbacks.get());
+            assertEquals(2, cell.snapshot(), "host snapshots are frozen data, not actor execution");
+            assertFalse(ActorRuntime.currentThreadOwnsActorNativeLease(),
+                    "host must not inherit the carrier identity after actor work");
+            assertThrows(IllegalStateException.class, () -> cell.update(value -> value + 1));
+        }
+    }
+
+    @Test
     void fiveSuspendedMessagesShareOneExclusiveNativeLeaseForAllActorKinds()
             throws Exception {
         for (ActorRuntime.ActorKind kind : ActorRuntime.ActorKind.values()) {
