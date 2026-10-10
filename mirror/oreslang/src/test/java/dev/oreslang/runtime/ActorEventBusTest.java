@@ -469,6 +469,48 @@ final class ActorEventBusTest {
     }
 
     @Test
+    void untrustedActorCanSubscribeWithExplicitHostMembershipAndDataOnlyGroupId()
+            throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var group = runtime.createActorGroup(ActorRuntime.ActorGroupScope.VM);
+            group.events().defineTopic("isolated-update",
+                    ActorEventBus.DeliveryPolicy.RELIABLE, 2);
+            // This factory is capture-free. The host explicitly authorizes
+            // membership before any untrusted message can inspect the group.
+            ActorRuntime.ActorRef<List<Object>> actor = runtime.spawnUntrusted(
+                    factoryContext -> (message, context) -> {
+                        var id = (ActorRuntime.ActorGroupId) message.getFirst();
+                        var bus = context.actorGroup(id).events();
+                        if ("subscribe".equals(message.get(1))) {
+                            bus.subscribe("isolated-update");
+                            context.runtime().emitCurrentActorOutput("subscribed");
+                        } else {
+                            var event = bus.<List<Long>>subscribe("isolated-update")
+                                    .tryRead().orElseThrow();
+                            context.runtime().emitCurrentActorOutput(event.value());
+                            context.self().stop();
+                        }
+                    });
+            group.join(actor, group.joinCapability());
+            actor.send(List.of(group.id(), "subscribe"));
+            var ack = actor.outputs().next().get(5, TimeUnit.SECONDS);
+            assertEquals("subscribed", ack.value().value());
+
+            var payload = new ArrayList<>(List.of(1L, 2L));
+            group.events().publishSystem("isolated-update", payload)
+                    .completion().get(5, TimeUnit.SECONDS);
+            payload.add(3L);
+            actor.send(List.of(group.id(), "read"));
+            var result = actor.outputs().next().get(5, TimeUnit.SECONDS);
+            assertEquals(List.of(1L, 2L), result.value().value());
+            assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+            assertTrue(actor.failure().isEmpty(), String.valueOf(actor.failure()));
+            assertEquals(0L, runtime.actorMemoryBytes(),
+                    "UNTRUSTED event copies must free all private reservations");
+        }
+    }
+
+    @Test
     void eventPayloadIsFrozenOnceBeforeFanout() throws Exception {
         try (ActorRuntime runtime = new ActorRuntime()) {
             ActorRuntime.ActorGroup group = runtime.createActorGroup();
