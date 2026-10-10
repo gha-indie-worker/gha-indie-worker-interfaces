@@ -1786,6 +1786,16 @@ public final class ActorRuntime implements AutoCloseable {
         });
     }
 
+    /**
+     * Read-only, non-consumable actor-start signal; not an exposed Future
+     * completion capability and not a Channel<T> with destructive reads.
+     */
+    public final class ActorReadySignal implements Awaitable<Void> {
+        private final ActorRef<?> actor;
+        private ActorReadySignal(ActorRef<?> actor) { this.actor = actor; }
+        @Override public OresFuture<Void> getAwaited() { return actor.ready(); }
+    }
+
     public final class ActorRef<M> {
         private final ActorId id;
         private final ActorKind kind;
@@ -1794,6 +1804,7 @@ public final class ActorRuntime implements AutoCloseable {
         // either observer cannot cancel the actor or fabricate its lifecycle.
         private final OresFuture<Void> readyFuture =
                 new OresFuture<>(() -> false, () -> { });
+        private final ActorReadySignal readySignal = new ActorReadySignal(this);
         private final OresFuture<Void> doneFuture =
                 new OresFuture<>(() -> false, () -> { });
         private volatile ActorOutputStream<Object> outputStream;
@@ -1818,6 +1829,19 @@ public final class ActorRuntime implements AutoCloseable {
             ActorCell<?> cell = actors.get(id);
             if (cell != null && !cell.stopped.get()) cell.schedule();
             return readyFuture;
+        }
+
+        /**
+         * Stable readiness API. The wrapper preserves the public awaitable
+         * contract even if readiness is later driven by channels, signals,
+         * or a different scheduler mechanism.
+         *
+         * The signal is multicast/level-triggered: multiple waiters, including
+         * late waiters, observe the same terminal readiness/failure outcome.
+         */
+        public ActorReadySignal getReadySignal() {
+            ready(); // Admission/initialization is triggered exactly as before.
+            return readySignal;
         }
 
         /**
@@ -2110,9 +2134,18 @@ public final class ActorRuntime implements AutoCloseable {
      * bus. It does not own a dispatcher and is not itself an actor, so group
      * communication never serializes through a central mailbox.</p>
      */
+    /**
+     * TREE groups are confined to one actual supervisor ancestry tree.
+     * VM groups are runtime-local and host-created. CLUSTER is intentionally
+     * rejected until authenticated cross-node membership/transport exists.
+     */
+    public enum ActorGroupScope { TREE, VM, CLUSTER }
+
     public final class ActorGroup implements AutoCloseable {
         private final ActorGroupId id;
         private final ActorId creator;
+        private final ActorGroupScope scope;
+        private final ActorId treeRoot;
         private final int memberLimit;
         private final int eventTopicLimit;
         private final Set<ActorId> members = ConcurrentHashMap.newKeySet();
@@ -2125,9 +2158,13 @@ public final class ActorRuntime implements AutoCloseable {
         private ActorGroup(
                 ActorGroupId id,
                 ActorId creator,
-                IsolatePolicy creatorPolicy) {
+                IsolatePolicy creatorPolicy,
+                ActorGroupScope scope,
+                ActorId treeRoot) {
             this.id = Objects.requireNonNull(id, "id");
             this.creator = creator;
+            this.scope = Objects.requireNonNull(scope, "scope");
+            this.treeRoot = treeRoot;
             Objects.requireNonNull(creatorPolicy, "creatorPolicy");
             this.memberLimit = Math.max(
                     1,
@@ -2144,6 +2181,16 @@ public final class ActorRuntime implements AutoCloseable {
         }
 
         public ActorGroupId id() { return id; }
+
+        public ActorGroupScope scope() {
+            requireObserver("inspect ActorGroup scope");
+            return scope;
+        }
+
+        public Optional<ActorId> treeRootId() {
+            requireObserver("inspect ActorGroup tree root");
+            return Optional.ofNullable(treeRoot);
+        }
 
         public Optional<ActorId> creatorId() {
             requireObserver("inspect ActorGroup creator");
@@ -2289,6 +2336,14 @@ public final class ActorRuntime implements AutoCloseable {
                 ActorCell<?> cell = actors.get(actorId);
                 if (cell == null || cell.stopped.get()) {
                     throw new IllegalStateException("actor is not alive: " + actorId);
+                }
+                if (scope == ActorGroupScope.TREE) {
+                    ActorCell<?> ancestor = cell;
+                    while (ancestor.parent != null) ancestor = ancestor.parent;
+                    if (!ancestor.ref.id().equals(treeRoot)) {
+                        throw new SecurityException(
+                                "actor is outside the ActorGroup supervisor tree");
+                    }
                 }
                 if (!members.contains(actorId) && members.size() >= memberLimit) {
                     throw new IllegalStateException(
@@ -3015,11 +3070,37 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     public ActorGroup createActorGroup() {
+        // Preserve the existing host-wide behavior, but prevent actor-created
+        // groups from silently spanning unrelated supervisor trees.
+        return createActorGroup(currentActorId().isPresent()
+                ? ActorGroupScope.TREE : ActorGroupScope.VM);
+    }
+
+    public ActorGroup createActorGroup(ActorGroupScope scope) {
         requireCallerRuntimeAffinity("create an ActorGroup");
         requireNotActorGroupMailman("create an ActorGroup");
+        Objects.requireNonNull(scope, "scope");
+        if (scope == ActorGroupScope.CLUSTER) {
+            throw new UnsupportedOperationException(
+                    "cluster ActorGroups require authenticated remote membership, "
+                    + "fencing, transport and delivery guarantees; not implemented");
+        }
         if (closed.get()) throw new IllegalStateException("actor runtime is closed");
 
         ActorId creator = currentActorId().orElse(null);
+        if (scope == ActorGroupScope.VM && creator != null) {
+            throw new SecurityException("VM-scope ActorGroups require host/supervisor creation");
+        }
+        if (scope == ActorGroupScope.TREE && creator == null) {
+            throw new SecurityException("TREE-scope ActorGroups require an owning actor tree");
+        }
+        ActorId treeRoot = null;
+        if (scope == ActorGroupScope.TREE) {
+            ActorCell<?> ancestor = actors.get(creator);
+            if (ancestor == null) throw new IllegalStateException("actor no longer registered");
+            while (ancestor.parent != null) ancestor = ancestor.parent;
+            treeRoot = ancestor.ref.id();
+        }
         IsolatePolicy creatorPolicy =
                 currentActorPolicy() == null ? policyCeiling : currentActorPolicy();
         if (creator != null && !actors.containsKey(creator)) {
@@ -3052,7 +3133,7 @@ public final class ActorRuntime implements AutoCloseable {
             while (true) {
                 ActorGroupId id = ActorGroupId.create();
                 ActorGroup group =
-                        new ActorGroup(id, creator, creatorPolicy);
+                        new ActorGroup(id, creator, creatorPolicy, scope, treeRoot);
                 if (actorGroups.putIfAbsent(id, group) == null) return group;
             }
         }
@@ -4579,21 +4660,28 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     static final class ActorGroupEventReservation implements AutoCloseable {
-        private final AtomicReference<ActorRuntime> owner;
+        private final AtomicReference<Runnable> release;
         private final long bytes;
 
         private ActorGroupEventReservation(ActorRuntime owner, long bytes) {
-            this.owner = new AtomicReference<>(Objects.requireNonNull(owner, "owner"));
+            Objects.requireNonNull(owner, "owner");
             if (bytes < 0) throw new IllegalArgumentException("bytes cannot be negative");
             this.bytes = bytes;
+            this.release = new AtomicReference<>(() -> owner.releaseSharedRuntimeBytes(bytes));
+        }
+
+        private ActorGroupEventReservation(MemoryReservation reservation, long bytes) {
+            Objects.requireNonNull(reservation, "reservation");
+            this.bytes = bytes;
+            this.release = new AtomicReference<>(reservation::close);
         }
 
         long bytes() { return bytes; }
 
         @Override
         public void close() {
-            ActorRuntime runtime = owner.getAndSet(null);
-            if (runtime != null) runtime.releaseSharedRuntimeBytes(bytes);
+            Runnable cleanup = release.getAndSet(null);
+            if (cleanup != null) cleanup.run();
         }
     }
 
@@ -4647,6 +4735,39 @@ public final class ActorRuntime implements AutoCloseable {
         return new FrozenActorGroupEventPayload(
                 frozen,
                 new ActorGroupEventReservation(this, bytes));
+    }
+
+    /**
+     * Per-subscriber data copy into the recipient's independent private
+     * mailbox-memory budget. Used by ActorEventBus for PRIVATE/UNTRUSTED,
+     * never for SHARED zero-copy subscriptions. No guest code runs here.
+     *
+     * This is *logical* JVM heap isolation. It does not imply a protected
+     * OS process / WASM / GraalVM native isolate has been provisioned.
+     */
+    FrozenActorGroupEventPayload copyActorGroupEventForSubscriber(
+            Object frozenValue, ActorId subscriber) {
+        Objects.requireNonNull(frozenValue, "frozenValue");
+        Objects.requireNonNull(subscriber, "subscriber");
+        ActorCell<?> cell = actors.get(subscriber);
+        if (cell == null || cell.stopped.get() || cell.finalized) {
+            throw new IllegalStateException("ActorGroup subscriber is no longer alive");
+        }
+        if (!isPrivateKind(cell.kind) || cell.memorySlice == null) {
+            throw new SecurityException("isolated event copies require a private actor memory slice");
+        }
+        validateMessageGraph(frozenValue);
+        rejectDataFreezeCapabilities(frozenValue, new IdentityHashMap<>(), 0);
+        if (cell.kind == ActorKind.UNTRUSTED) {
+            rejectUntrustedInboundCapabilities(frozenValue, new IdentityHashMap<>(), 0);
+        }
+        long runtimeRemaining = Math.max(0L, policyCeiling.maxHeapBytes() - actorMemoryBytes());
+        long allowed = Math.min(cell.memorySlice.remainingBytes(), runtimeRemaining);
+        estimatePrivateTransportBytes(frozenValue, new IdentityHashMap<>(), 0, allowed);
+        Object copy = isolateCopy(frozenValue);
+        MemoryReservation reserved = cell.memorySlice.reserveMailbox(copy);
+        return new FrozenActorGroupEventPayload(copy,
+                new ActorGroupEventReservation(reserved, estimateFrozenBytes(copy)));
     }
 
     @SuppressWarnings("unchecked")
