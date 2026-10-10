@@ -6660,6 +6660,10 @@ public final class OresEvalRootNode extends RootNode {
                         return actorRef.getReadySignal();
                     };
                     case "done" -> actorRef.done();
+                    case "get_done_signal" -> (Invokable) args -> {
+                        requireZero(args, "ActorRef.get_done_signal");
+                        return actorRef.getDoneSignal();
+                    };
                     case "outputs" -> actorRef.outputs();
                     case "id" -> actorRef.id();
                     case "kind" -> actorRef.kind();
