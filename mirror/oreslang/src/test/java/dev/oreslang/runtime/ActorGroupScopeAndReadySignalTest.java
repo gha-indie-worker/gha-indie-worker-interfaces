@@ -133,6 +133,70 @@ final class ActorGroupScopeAndReadySignalTest {
     }
 
     @Test
+    void doneObserverCannotCancelLifecycleOrStartAColdActor() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var started = new java.util.concurrent.atomic.AtomicInteger();
+            ActorRuntime.ActorRef<String> actor = runtime.spawnShared(
+                    () -> {
+                        started.incrementAndGet();
+                        return (message, context) -> { };
+                    });
+            var done = actor.getDoneSignal();
+            assertSame(done, actor.getDoneSignal());
+            assertFalse(done.getAwaited().isDone());
+            assertFalse(done.getAwaited().cancel(true),
+                    "observers must not be able to cancel the shared lifecycle future");
+            assertEquals(0, started.get(),
+                    "obtaining the done signal must not schedule actor initialization");
+            actor.stop();
+            done.getAwaited().get(5, TimeUnit.SECONDS);
+            assertEquals(0, started.get());
+            assertFalse(actor.getDoneSignal().getAwaited().cancel(false));
+            assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void doneWaitsForTurnExecutorExitEvenAfterGuestRequestsStop() throws Exception {
+        var guestTurnFinished = new CountDownLatch(1);
+        var releaseCarrier = new CountDownLatch(1);
+        ActorRuntime.TurnExecutor gated = turn -> {
+            turn.run();
+            guestTurnFinished.countDown();
+            boolean interrupted = false;
+            for (;;) {
+                try {
+                    releaseCarrier.await();
+                    break;
+                } catch (InterruptedException interruption) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        };
+
+        try (ActorRuntime runtime = new ActorRuntime(
+                IsolatePolicy.developer(),
+                new ActorRuntime.DispatcherConfig(1, 1, 8, 64),
+                gated)) {
+            var actor = runtime.spawnShared(
+                    () -> (String message, ActorRuntime.ActorContext<String> ctx) ->
+                            ctx.self().stop());
+            var done = actor.getDoneSignal();
+            try {
+                actor.send("stop");
+                assertTrue(guestTurnFinished.await(5, TimeUnit.SECONDS));
+                assertFalse(done.getAwaited().isDone(),
+                        "done must not settle inside TurnExecutor while carrier exit is pending");
+            } finally {
+                releaseCarrier.countDown();
+            }
+            done.getAwaited().get(5, TimeUnit.SECONDS);
+            assertTrue(actor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void readinessFailureStaysFailedForLateWaiters() throws Exception {
         try (ActorRuntime runtime = new ActorRuntime()) {
             ActorRuntime.ActorRef<String> broken = runtime.spawnShared(
