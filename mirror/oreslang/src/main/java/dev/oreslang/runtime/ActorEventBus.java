@@ -246,11 +246,9 @@ public final class ActorEventBus implements AutoCloseable {
         requireOpen();
         ActorRuntime.ActorId subscriber =
                 group.requireCurrentMember("subscribe to ActorGroup events");
-        if (ActorRuntime.currentActorKind() != ActorRuntime.ActorKind.SHARED) {
-            throw new SecurityException(
-                    "private/isolated actors cannot subscribe to the zero-copy ActorGroup event bus yet; "
-                            + "use actor mailboxes until isolated event delivery is available");
-        }
+        // SHARED subscribers share one frozen event. PRIVATE/UNTRUSTED
+        // subscribers receive their own copy with recipient-scoped memory
+        // reservation; they can never observe the publisher's event graph.
         TopicState topic = requireTopic(name);
 
         int actorLimit =
@@ -417,6 +415,7 @@ public final class ActorEventBus implements AutoCloseable {
             ActorRuntime.ActorId publisher,
             Runnable commitState) {
         Event<Object> event = null;
+        List<Event<Object>> isolatedCopies = new ArrayList<>();
         try {
             synchronized (topic.deliveryLock) {
                 requireOpen();
@@ -481,6 +480,21 @@ public final class ActorEventBus implements AutoCloseable {
                         reserved.add(subscription);
                     }
 
+                    // Allocate every isolated recipient copy before the
+                    // first reliable channel admission. Allocation failure
+                    // never causes an avoidable half-broadcast.
+                    List<Event<Object>> deliveries = new ArrayList<>(reserved.size());
+                    try {
+                        for (Subscription<?> subscription : reserved) {
+                            deliveries.add(eventForSubscriber(event, subscription, isolatedCopies));
+                        }
+                    } catch (Throwable failure) {
+                        for (Subscription<?> subscription : reserved) {
+                            subscription.releaseReliableEvent();
+                        }
+                        throw failure;
+                    }
+
                     List<OresFuture<Void>> writes =
                             new ArrayList<>(reserved.size());
                     int started = 0;
@@ -490,7 +504,7 @@ public final class ActorEventBus implements AutoCloseable {
                             Subscription<Object> subscription =
                                     (Subscription<Object>) reserved.get(started);
                             writes.add(
-                                    subscription.writeReliableReserved(event));
+                                    subscription.writeReliableReserved(deliveries.get(started)));
                         }
                     } catch (Throwable failure) {
                         for (OresFuture<Void> write : writes) {
@@ -518,9 +532,11 @@ public final class ActorEventBus implements AutoCloseable {
                     @SuppressWarnings("unchecked")
                     Subscription<Object> subscription =
                             (Subscription<Object>) raw;
+                    Event<Object> recipientEvent =
+                            eventForSubscriber(event, subscription, isolatedCopies);
                     switch (topic.policy) {
                         case LATEST -> {
-                            int replaced = subscription.writeLatest(event);
+                            int replaced = subscription.writeLatest(recipientEvent);
                             if (replaced >= 0) {
                                 accepted++;
                                 coalesced += replaced;
@@ -529,7 +545,7 @@ public final class ActorEventBus implements AutoCloseable {
                             }
                         }
                         case LOSSY -> {
-                            if (subscription.writeLossy(event)) accepted++;
+                            if (subscription.writeLossy(recipientEvent)) accepted++;
                             else dropped++;
                         }
                         case RELIABLE ->
@@ -556,7 +572,29 @@ public final class ActorEventBus implements AutoCloseable {
                 // retain their own references until read/coalesce/close.
                 event.releaseDelivery();
             }
+            for (Event<Object> isolated : isolatedCopies) {
+                isolated.releaseDelivery();
+            }
         }
+    }
+
+    /**
+     * A published event is one logical (topic, sequence) item; each isolated
+     * recipient has an independent frozen value and private memory lease.
+     * Only the transport/control code constructs these event envelopes.
+     */
+    private Event<Object> eventForSubscriber(
+            Event<Object> published,
+            Subscription<?> subscriber,
+            List<Event<Object>> isolatedCopies) {
+        if (subscriber.kind == ActorRuntime.ActorKind.SHARED) return published;
+        ActorRuntime.FrozenActorGroupEventPayload copied =
+                runtime.copyActorGroupEventForSubscriber(published.value(), subscriber.subscriber);
+        Event<Object> event = new Event<>(
+                published.topic(), published.sequence(), published.publisher(),
+                published.publishedNanos(), copied.value(), copied.reservation());
+        isolatedCopies.add(event);
+        return event;
     }
 
     private OresFuture<List<Void>> combineReliableWrites(
@@ -695,6 +733,7 @@ public final class ActorEventBus implements AutoCloseable {
     public final class Subscription<T> implements AutoCloseable {
         private final TopicState topic;
         private final ActorRuntime.ActorId subscriber;
+        private final ActorRuntime.ActorKind kind;
         private final ChannelRuntime.Channel<Event<T>> channel;
         private final Object latestLock = new Object();
         private final AtomicInteger reliableOutstanding = new AtomicInteger();
@@ -709,6 +748,8 @@ public final class ActorEventBus implements AutoCloseable {
                 int capacity) {
             this.topic = topic;
             this.subscriber = subscriber;
+            this.kind = Objects.requireNonNull(
+                    ActorRuntime.currentActorKind(), "subscription must originate in an actor turn");
             this.channel = new ChannelRuntime.Channel<>(capacity);
             this.pendingReadLimit = ActorRuntime.currentActorPolicy().maxMailboxMessages();
             long bounded = Math.max((long) capacity + 1L, (long) capacity * 2L);
