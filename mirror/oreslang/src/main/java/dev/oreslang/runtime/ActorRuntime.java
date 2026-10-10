@@ -1394,7 +1394,8 @@ public final class ActorRuntime implements AutoCloseable {
         if (currentActorMailSequence().isEmpty()) return false;
         ActorExecutionContext execution = CURRENT_ACTOR_EXECUTION.get();
         ActorInboxMail<?> mail = execution.runtime().currentActor.get().activeMail;
-        return mail != null && Objects.equals(mail.value(), token);
+        return mail != null && mail.value() instanceof String ticket
+                && token instanceof String expected && ticket.equals(expected);
     }
 
     public ContinuationTarget captureCurrentContinuationTarget() {
