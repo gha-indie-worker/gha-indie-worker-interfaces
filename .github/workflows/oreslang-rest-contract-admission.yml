@@ -1,0 +1,35 @@
+name: exact-source Oreslang REST contract compiler admission
+on:
+  push:
+    branches: [test/oreslang-rest-contract-proof-20261009]
+  pull_request:
+    paths:
+      - '.github/workflows/oreslang-rest-contract-admission.yml'
+      - 'mirror/oreslang/src/test/java/dev/oreslang/SharedRestRouteContractAdmissionTest.java'
+      - 'mirror/oreslang/src/test/resources/oreslang/shared/RouteContract.ores'
+permissions:
+  contents: read
+jobs:
+  exact-rest-contract-typecheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Assert reviewed shared source and compiler parser Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object mirror/oreslang/src/test/resources/oreslang/shared/RouteContract.ores)" = "6962c050b6223a30bb50e46ba6920b1d22ad037b"
+          test "$(git hash-object mirror/oreslang/src/main/java/dev/oreslang/parser/Parser.java)" = "c8436768df0894d01bdc030dc1d746e2e3faf6de"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile exact shared REST source and negative Oreslang cases
+        working-directory: mirror/oreslang
+        run: |
+          mvn -B -ntp -P '!native-thread-unix' -Dores.runtime.carriers=java \
+            -Dtest=SharedRestRouteContractAdmissionTest \
+            -Dsurefire.failIfNoSpecifiedTests=true test
