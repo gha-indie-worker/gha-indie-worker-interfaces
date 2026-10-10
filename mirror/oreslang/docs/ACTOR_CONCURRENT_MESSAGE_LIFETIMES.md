@@ -58,7 +58,10 @@ quietly without resurrecting the message.
 ## Admission / fairness / quotas
 
 - `concurrency` must be compile-time immutable in 1..1024 (1..32 untrusted);
-  it cannot be changed through a runtime actor field write.
+  it cannot be changed through a runtime actor field write. The runtime
+  seals configuration permanently at first user-mail admission, even when
+  that first receive has already completed; later host callbacks cannot
+  reconfigure it after the active-message table becomes empty.
 - Ordinary actor mail admission pauses when active receives reach the limit.
   Control continuations have priority, but after 8 continuations one eligible
   user message may enter to prevent `rt cooperate` starvation.
