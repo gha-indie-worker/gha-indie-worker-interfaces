@@ -88,6 +88,24 @@ public final class NativeHttp implements AutoCloseable {
                 exchange.state.abort(500);
             }
         }
+
+        /**
+         * Explicit multi-request actor path. Each request gets its own move
+         * ticket and mailbox principal; a failed HTTP exchange cannot cancel
+         * this shared actor or another request it is processing.
+         */
+        public void dispatchTo(Exchange exchange, ActorRuntime.ActorRef<Object> actor) {
+            if (ActorRuntime.inActorExecution()) throw new SecurityException("HTTP dispatch belongs to supervisor");
+            Objects.requireNonNull(exchange, "exchange");
+            Objects.requireNonNull(actor, "actor");
+            if (actor.kind() != kind) throw new SecurityException("HTTP handler kind mismatch");
+            try {
+                actor.send(exchange.moveToReusable(actor));
+            } catch (RuntimeException failure) {
+                exchange.state.abort(500);
+                throw failure;
+            }
+        }
     }
 
     public Exchange claim(String token) {
@@ -95,8 +113,12 @@ public final class NativeHttp implements AutoCloseable {
         if (exchange == null) throw new IllegalStateException("unknown or already claimed HTTP transfer");
         synchronized (exchange.state) {
             exchange.checkOwner();
+            if (!ActorRuntime.currentActorMailCarries(token)) {
+                throw new SecurityException("HTTP transfer must be claimed by its owning mailbox message");
+            }
             if (!transfers.remove(token, exchange)) throw new IllegalStateException("HTTP transfer already claimed");
             exchange.state.ticket = null;
+            exchange.state.claimedMailSequence = ActorRuntime.currentActorMailSequence().orElseThrow();
             exchange.state.claimedNanos = System.nanoTime();
             return exchange;
         }
@@ -104,7 +126,10 @@ public final class NativeHttp implements AutoCloseable {
 
     private Object owner() {
         if (ActorRuntime.inActorExecution()) {
-            if (ActorRuntime.currentActorRuntime() != context.actors()) throw new SecurityException("foreign actor runtime");
+            if (ActorRuntime.currentActorRuntime() != context.actors()
+                    || !ActorRuntime.currentThreadOwnsActorNativeLease()) {
+                throw new SecurityException("HTTP endpoint requires live actor native-carrier ownership");
+            }
             return ActorRuntime.currentActorId().orElseThrow();
         }
         return context;
@@ -228,6 +253,8 @@ public final class NativeHttp implements AutoCloseable {
         volatile boolean terminal;
         boolean transportClosed;
         String ticket;
+        Long claimedMailSequence;
+        boolean reusableActor;
         final String requestId = UUID.randomUUID().toString();
         final long admittedNanos = System.nanoTime();
         final OresFuture<Object> completion = new OresFuture<>(() -> false, () -> { });
@@ -249,7 +276,7 @@ public final class NativeHttp implements AutoCloseable {
                 terminal = true;
             }
             // Never perform socket I/O or actor cancellation while holding the ownership monitor.
-            if (actor != null) actor.cancel();
+            if (actor != null && !reusableActor) actor.cancel();
             if (alreadyClosed) { release(); return; }
             try { io.execute(() -> { try { if (send) reject(raw, status); else raw.close(); } finally { synchronized (this) { transportClosed = true; } release(); } }); }
             catch (RejectedExecutionException closed) { release(); }
@@ -262,7 +289,7 @@ public final class NativeHttp implements AutoCloseable {
             // Admission includes the actor lifetime, even after the response ends.
             // A handler that forgets self.end cannot accumulate unbounded actors.
             synchronized (this) {
-                if (!transportClosed || (actor != null && !actor.done().isDone())) return;
+                if (!transportClosed || (actor != null && !reusableActor && !actor.done().isDone())) return;
                 if (ticket != null) { transfers.remove(ticket); ticket = null; }
                 if (deadline != null) deadline.cancel(false);
             }
@@ -286,8 +313,22 @@ public final class NativeHttp implements AutoCloseable {
             if (state.terminal) throw new IllegalStateException("HTTP exchange is closed");
             if (generation != state.generation || !owner.equals(state.owner)) throw new IllegalStateException("HTTP exchange has moved");
             if (!owner.equals(NativeHttp.this.owner())) throw new SecurityException("HTTP exchange belongs to another execution domain");
+            // Actor ID by itself is not sufficient once a long-lived actor has
+            // several unfinished HTTP requests. Bind every claimed exchange to
+            // the exact received mail's sequence across async continuations.
+            if (state.claimedMailSequence != null
+                    && !ActorRuntime.currentActorMailSequence().equals(Optional.of(state.claimedMailSequence))) {
+                throw new SecurityException("HTTP exchange belongs to another actor message");
+            }
         }
         public String moveTo(ActorRuntime.ActorRef<?> destination) {
+            return moveToActor(destination, false);
+        }
+        /** Send one exchange to an existing long-lived actor without adopting its lifetime. */
+        public String moveToReusable(ActorRuntime.ActorRef<?> destination) {
+            return moveToActor(destination, true);
+        }
+        private String moveToActor(ActorRuntime.ActorRef<?> destination, boolean reusable) {
             synchronized (state) {
                 checkOwner();
                 if (ActorRuntime.inActorExecution()) throw new SecurityException("only the supervisor may dispatch an HTTP exchange");
@@ -296,6 +337,7 @@ public final class NativeHttp implements AutoCloseable {
                 if (destination.kind() == ActorRuntime.ActorKind.UNTRUSTED) throw new SecurityException("HTTP exchange transfer to untrusted actors is not supported");
                 state.movedNanos = System.nanoTime();
                 state.generation++; state.owner = destination.id(); state.actor = destination;
+                state.reusableActor = reusable;
                 String token = UUID.randomUUID().toString(); state.ticket = token;
                 Exchange moved = new Exchange(state, destination.id(), state.generation);
                 transfers.put(token, moved);
@@ -320,6 +362,8 @@ public final class NativeHttp implements AutoCloseable {
         public boolean canRespond() {
             synchronized (state) {
                 return owner.equals(NativeHttp.this.owner()) && generation == state.generation
+                    && (state.claimedMailSequence == null
+                        || ActorRuntime.currentActorMailSequence().equals(Optional.of(state.claimedMailSequence)))
                     && !state.terminal && !state.busy && !state.committed;
             }
         }
