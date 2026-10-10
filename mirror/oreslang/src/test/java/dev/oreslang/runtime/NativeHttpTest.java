@@ -190,7 +190,7 @@ class NativeHttpTest {
                             "each request must keep an independent immutable request identity");
                 }
             });
-        assertTrue(output.contains("200\\n200\\n0"), output);
+        assertTrue(output.contains("200\n200\n0"), output);
     }
 
     @Test void ordinaryBorrowsStillCannotSpanActorAwait() {
