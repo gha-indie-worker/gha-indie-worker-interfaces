@@ -8,7 +8,7 @@ bounded channel-backed mailboxes, actor identity, child supervision, and
 **already used for ActorGroup Mailman outbox messages**. Do not silently
 repurpose it as a class actor's inbound message.
 
-## Readiness signal API (PR #519)
+## Actor lifecycle signal API (PR #519)
 
 `await actor.get_ready_signal()` is the preferred stable source spelling.
 It returns one actor-owned, non-consumable `ReadySignal<void>` implementing the
@@ -20,6 +20,17 @@ a consumable channel read or a capability to complete/cancel readiness.
 `actor.ready` remains for source compatibility. Do not pass a `ReadySignal`
 into `Future.all` as if it were a raw Future; await each or add an explicit
 `Awaitable.all` combinator later.
+
+`await actor.get_done_signal()` is the symmetric termination lifecycle API.
+It returns the same cached `DoneSignal<void>` wrapper for every call. The
+signal is read-only, non-consumable, safe for multiple simultaneous or late
+waiters, and observes finalization **after actor cleanup and TurnExecutor
+exit**. Successful completion resolves to void; actor failure settles the
+signal exceptionally. Merely requesting a done signal does not initialize
+an unstarted actor (unlike requesting its ready signal). Like readiness, the
+public type is an `Awaitable`; an internal Future or channel/notification
+implementation may change without changing source call sites. `actor.done`
+remains a compatibility property.
 
 ## Target `main.ores` (partially implemented end-to-end target)
 
@@ -67,7 +78,9 @@ pub async routine main(): void {
     stdio.println(output.actor_id, output.sequence, output.value);
   done
 
-  await Future.all([workers[0].done, workers[1].done, workers[2].done]);
+  await workers[0].get_done_signal();
+  await workers[1].get_done_signal();
+  await workers[2].get_done_signal();
   return;
 }
 ```
@@ -89,7 +102,8 @@ of output strings.
 | `w.ready` | `Future<void>` (compatibility) | Legacy property retained while userland migrates to get_ready_signal(); do not design new APIs around its implementation type |
 | `w.send(mail)` | `void` or explicit nonblocking variant | **Inbound**, serialized, bounded actor mailbox; reject capability/pointer/function payloads |
 | `w.outputs` | `AsyncIterator<ActorOutput<T>>` or read-only `Channel<ActorOutput<T>>` | **Outbound**, bounded, async/backpressure-capable, parent-observable stream |
-| `w.done` | `Future<void>` | Settles after actor finalization and isolate/carrier cleanup |
+| `w.get_done_signal()` | `DoneSignal<void>` (awaitable) | Stable reusable completion abstraction; completion includes actor finalization and carrier exit, and failures propagate to every waiter |
+| `w.done` | `Future<void>` (compatibility) | Legacy completion property retained while userland migrates to get_done_signal() |
 | `w.stop()`, `w.cancel()` | `void`, `bool` | Graceful stop vs structured cancellation (supervisor authority checks apply) |
 | `w.kill()` | `bool` | Force-isolated cancellation only if revoker is configured; never thread interruption masquerading as isolation |
 | `self.send(value)` | `Future<void>` or nonblocking admission acknowledgement | **Outbound** from actor to its output stream; NOT recursive delivery to own inbox |
