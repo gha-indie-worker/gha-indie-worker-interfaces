@@ -259,16 +259,67 @@ final class PointerlessFncOwnershipTest {
     }
 
     @Test
-    void rtShareMutableArrayStillFailsClosed() {
+    void rtShareFreezesNestedOwnedArraysAndPreservesSourceOwnership() throws Exception {
+        String output = run("""
+                pub routine main(): void {
+                  val Array<int> nested = new Array<int>();
+                  nested.add(5);
+                  val Array<Array<int>> source = new Array<Array<int>>();
+                  source.add(nested);
+                  val frozen = rt share source;
+                  nested.add(6);
+                  source.add(nested);
+                  stdio.stdout.write(frozen.size);
+                  stdio.stdout.write(frozen[0].size);
+                  stdio.stdout.write(source.size);
+                  return;
+                }
+                """);
+        assertEquals("112", output);
+    }
+
+    @Test
+    void rtShareReadonlyArraysRejectNestedMutation() {
         IllegalArgumentException bad = assertThrows(IllegalArgumentException.class,
                 () -> TypeChecker.check(Parser.parse("""
                     fnc bad(): void {
-                      val Array<int> a = new Array<int>();
-                      val leaked = rt share a;
+                      val Array<Array<int>> source = new Array<Array<int>>();
+                      val frozen = rt share source;
+                      frozen[0].add(2);
                       return;
                     }
                     """)));
-        assertTrue(bad.getMessage().contains("rt share"), bad.getMessage());
+        assertTrue(bad.getMessage().toLowerCase().contains("readonly"),
+                bad.getMessage());
+    }
+
+    @Test
+    void rtTakeCannotAliasProjectedSourceStorage() {
+        for (String source : java.util.List.of(
+                """
+                define class Box as
+                  pub let int value = 7;
+                end
+                fnc bad(): void {
+                  val Box object = new Box();
+                  val stolen = rt take object.value;
+                  return;
+                }
+                """,
+                """
+                fnc bad(): void {
+                  val Array<int> values = new Array<int>();
+                  values.add(1);
+                  val stolen = rt take values[0];
+                  return;
+                }
+                """)) {
+            IllegalArgumentException bad = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(Parser.parse(source)));
+            assertTrue(bad.getMessage().contains("rt take"), bad.getMessage());
+            assertTrue(bad.getMessage().contains("source slot"), bad.getMessage());
+        }
     }
 
     private String run(String code) throws Exception {
