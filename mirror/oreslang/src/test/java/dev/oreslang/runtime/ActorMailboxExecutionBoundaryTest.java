@@ -17,6 +17,47 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(20)
 final class ActorMailboxExecutionBoundaryTest {
     @Test
+    void concurrencyCannotBeReconfiguredAfterACompletedMail() throws Exception {
+        var calls = new AtomicInteger();
+        var attempted = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        try (var images = new SharedCodeImageStore();
+             var runtime = new ActorRuntime(IsolatePolicy.developer())) {
+            var image = images.publish("fixed-concurrency.ores",
+                    Parser.parse("pub routine main(): void { return; }"));
+            var executor = new ActorRuntime.ActorCodeExecutor() {
+                @Override public SharedCodeImageStore.CodeImage codeImage() { return image; }
+                @Override public ActorRuntime.ActorOwnedGuestState initializeActor(
+                        String type, ActorRuntime.ActorContext<Object> context) {
+                    runtime.configureCurrentActorConcurrency(2);
+                    return context.self()::id;
+                }
+                @Override public void receiveActor(String type,
+                        ActorRuntime.ActorOwnedGuestState state,
+                        ActorRuntime.ActorInboxMail<Object> mail,
+                        ActorRuntime.ActorContext<Object> context) {
+                    if (calls.incrementAndGet() == 2) {
+                        try {
+                            runtime.configureCurrentActorConcurrency(3);
+                        } catch (Throwable rejected) {
+                            attempted.set(rejected);
+                        }
+                        context.self().stop();
+                    }
+                }
+            };
+            var actor = runtime.spawnCodeActor(ActorRuntime.ActorKind.SHARED, executor, "Worker");
+            actor.ready().get(5, TimeUnit.SECONDS);
+            actor.send("first");
+            actor.send("second");
+            actor.done().get(5, TimeUnit.SECONDS);
+            assertEquals(2, calls.get());
+            assertInstanceOf(IllegalStateException.class, attempted.get(),
+                    "configuration must stay sealed even after the first mail completed");
+            assertTrue(actor.failure().isEmpty(), actor.failure().toString());
+        }
+    }
+
+    @Test
     void initializationMailContinuationsAndCleanupShareOneExecutionLeaseForEveryKind() throws Exception {
         for (var kind : ActorRuntime.ActorKind.values()) {
             var threads = java.util.concurrent.ConcurrentHashMap.<Thread>newKeySet();
