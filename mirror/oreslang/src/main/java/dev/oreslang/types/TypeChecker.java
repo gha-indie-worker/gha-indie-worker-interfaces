@@ -980,7 +980,9 @@ public final class TypeChecker {
                     && !method.isStatic()
                     && (method.name().equals("send")
                             || method.name().equals("end")
-                            || method.name().equals("endWithCleanup"))) {
+                            || method.name().equals("endWithCleanup")
+                            || method.name().equals("get_ready_signal")
+                            || method.name().equals("get_done_signal"))) {
                 throw new IllegalArgumentException(
                         "actor method name '" + method.name()
                                 + "' is reserved by the non-overridable actor transport/lifecycle API");
@@ -4506,7 +4508,8 @@ public final class TypeChecker {
                 || named.name().equals("Mutex") || named.name().equals("MutexGuard") || named.name().equals("Future")
                 || named.name().equals("Channel") || named.name().equals("SelectCase")
                 || named.name().equals("SelectSet") || named.name().equals("SelectResult")
-                || named.name().equals("Iterator") || named.name().equals("AsyncIterator")) {
+                || named.name().equals("Iterator") || named.name().equals("AsyncIterator")
+                || named.name().equals("ReadySignal") || named.name().equals("DoneSignal")) {
             throw new IllegalArgumentException(
                     where + " cannot use " + named.name()
                             + " across an actor boundary; actor communication uses ActorRef/mailbox transport");
@@ -4588,7 +4591,8 @@ public final class TypeChecker {
 
         if (named.name().equals("Mutex") || named.name().equals("MutexGuard")
                 || named.name().equals("Future") || named.name().equals("Iterator")
-                || named.name().equals("AsyncIterator") || named.name().equals("SharedMutex")) return false;
+                || named.name().equals("AsyncIterator") || named.name().equals("SharedMutex")
+                || named.name().equals("ReadySignal") || named.name().equals("DoneSignal")) return false;
         if (named.name().equals("Readonly")) {
             return named.arguments().size() == 1
                     && isSharedSafe(named.arguments().getFirst(), seen, genericBindings);
