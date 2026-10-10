@@ -3508,49 +3508,48 @@ public final class OresEvalRootNode extends RootNode {
                 SourceTask task,
                 Object value,
                 SourceValueCont continuation) {
-            OresFuture<?> future;
-            if (value instanceof OresFuture<?> oresFuture) {
-                future = oresFuture;
-            } else if (value instanceof Awaitable<?> awaitable) {
-                future = awaitable.getAwaited();
-            } else if (value instanceof CompletionStage<?> stage) {
-                future = OresFuture.from(stage);
-            } else {
-                continuation.accept(
-                        task,
-                        value,
-                        null);
-                return;
-            }
-
-            if (future == null) {
-                continuation.accept(
-                        task,
-                        null,
-                        new IllegalStateException(
-                                "awaitable projected a null Future"));
+            // Resolve the awaitable projection separately from guest
+            // continuation dispatch. A completion callback must never run
+            // twice merely because downstream guest code throws.
+            final OresFuture<?> future;
+            try {
+                if (value instanceof OresFuture<?> oresFuture) {
+                    future = oresFuture;
+                } else if (value instanceof Awaitable<?> awaitable) {
+                    future = awaitable.getAwaited();
+                } else if (value instanceof CompletionStage<?> stage) {
+                    future = OresFuture.from(stage);
+                } else {
+                    throw new IllegalArgumentException(
+                            "await requires a Future or Awaitable, got "
+                                    + (value == null ? "null" : value.getClass().getName()));
+                }
+                if (future == null) {
+                    throw new IllegalStateException("awaitable projected a null Future");
+                }
+            } catch (RuntimeException | Error failure) {
+                continuation.accept(task, null, failure);
                 return;
             }
 
             if (future.isDone()) {
+                final Object resolved;
                 try {
-                    continuation.accept(
-                            task,
-                            future.join(),
-                            null);
+                    resolved = future.join();
                 } catch (RuntimeException | Error failure) {
                     continuation.accept(task, null, failure);
+                    return;
                 }
+                // Do NOT include continuation.accept() in the try/catch
+                // above: if it throws, replaying it would resume twice.
+                continuation.accept(task, resolved, null);
                 return;
             }
 
             task.suspend(
                     future,
                     (t, result, failure) ->
-                            continuation.accept(
-                                    t,
-                                    result,
-                                    failure));
+                            continuation.accept(t, result, failure));
         }
 
         private void evalSuspendableChannel(
@@ -6152,7 +6151,9 @@ public final class OresEvalRootNode extends RootNode {
                 if (value instanceof CompletionStage<?> stage) {
                     return AsyncRuntime.await(stage);
                 }
-                return value;
+                throw new IllegalArgumentException(
+                        "await requires a Future or Awaitable, got "
+                                + (value == null ? "null" : value.getClass().getName()));
             }
             if (expr instanceof Ast.ChannelOpExpr channelOp) {
                 return evalChannelOperation(channelOp, env);
