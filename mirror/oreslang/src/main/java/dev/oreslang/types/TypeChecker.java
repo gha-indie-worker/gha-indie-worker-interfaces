@@ -2347,12 +2347,14 @@ public final class TypeChecker {
                             }
                             yield Primitive.BOOL;
                         }
-                        case "get_ready_signal" -> {
+                        case "get_ready_signal", "get_done_signal" -> {
                             if (!call.arguments().isEmpty()) {
                                 throw new IllegalArgumentException(
-                                        "ActorRef.get_ready_signal expects no arguments");
+                                        "ActorRef." + member.member() + " expects no arguments");
                             }
-                            yield new Named("ReadySignal", List.of(Primitive.VOID));
+                            yield new Named(
+                                    member.member().equals("get_ready_signal") ? "ReadySignal" : "DoneSignal",
+                                    List.of(Primitive.VOID));
                         }
                         case "ready", "done", "outputs", "id", "kind" ->
                                 throw new IllegalArgumentException(
@@ -2849,7 +2851,7 @@ public final class TypeChecker {
                             List.of(Unknown.INSTANCE));
                     case "id" -> new Named("ActorId", List.of());
                     case "kind" -> new Named("ActorKind", List.of());
-                    case "send", "stop", "cancel", "kill", "get_ready_signal" ->
+                    case "send", "stop", "cancel", "kill", "get_ready_signal", "get_done_signal" ->
                             throw new IllegalArgumentException(
                                     "ActorRef." + member.member()
                                             + " is direct-call-only; invoke it with (...)");
@@ -3183,12 +3185,13 @@ public final class TypeChecker {
         if (expr instanceof Ast.AwaitExpr awaited) {
             Type awaitedType = typeOf(awaited.expression(), env, generics, self);
             if (awaitedType instanceof Named named
-                    && (named.name().equals("Future") || named.name().equals("ReadySignal"))
+                    && (named.name().equals("Future") || named.name().equals("ReadySignal")
+                        || named.name().equals("DoneSignal"))
                     && named.arguments().size() == 1) {
                 return named.arguments().getFirst();
             }
             throw new IllegalArgumentException(
-                    "await requires Future<T> or ReadySignal<T>; got " + awaitedType);
+                    "await requires Future<T>, ReadySignal<T> or DoneSignal<T>; got " + awaitedType);
         }
         if (expr instanceof Ast.ChannelOpExpr channelOp) {
             Type element = channelElementType(
