@@ -13,6 +13,16 @@ import java.util.concurrent.RejectedExecutionException;
  * the process runs another task. On resume, its carrier may differ.</p>
  */
 final class SerialProcessExecutor implements Executor {
+    /**
+     * A scheduled guest turn must settle its owning Future if carriers
+     * reject an already-admitted queue after another turn fails fatally.
+     * Rejection callbacks are runtime bookkeeping only: they MUST NOT run
+     * guest code on the carrier or the rejecting producer thread.
+     */
+    interface RejectionAwareTurn extends Runnable {
+        void reject(Throwable failure);
+    }
+
     private final Executor carriers;
     private final int capacity;
     private final ArrayDeque<Runnable> ready = new ArrayDeque<>();
@@ -59,17 +69,35 @@ final class SerialProcessExecutor implements Executor {
             }
         } finally {
             // A fatal carrier failure must not leave an accepted queue orphaned.
-            // New admissions cannot start another drain until this handoff.
+            // The handoff is serialized against all new submitters; a rejected
+            // retry removes the entire pending batch before producers resume.
+            java.util.List<Runnable> rejectedTurns = java.util.List.of();
+            Throwable rejection = null;
             synchronized (ready) {
                 draining = false;
                 if (!ready.isEmpty()) {
                     draining = true;
                     try {
                         carriers.execute(this::drain);
-                    } catch (RuntimeException | Error rejected) {
+                    } catch (RuntimeException | Error failure) {
                         draining = false;
-                        // The owning scheduler closes/cancels outstanding tasks
-                        // on runtime shutdown; do not execute guest code inline.
+                        rejectedTurns = new java.util.ArrayList<>(ready);
+                        ready.clear();
+                        rejection = failure;
+                    }
+                }
+            }
+            if (rejection != null) {
+                for (Runnable stranded : rejectedTurns) {
+                    if (stranded instanceof RejectionAwareTurn turn) {
+                        try {
+                            turn.reject(rejection);
+                        } catch (Throwable callbackFailure) {
+                            // A broken observer must not prevent all the other
+                            // accepted guest task Futures from being settled.
+                            if (callbackFailure instanceof VirtualMachineError fatal) throw fatal;
+                            if (callbackFailure instanceof ThreadDeath fatal) throw fatal;
+                        }
                     }
                 }
             }
