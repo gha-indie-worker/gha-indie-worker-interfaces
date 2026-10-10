@@ -6146,6 +6146,9 @@ public final class OresEvalRootNode extends RootNode {
                 if (value instanceof OresFuture<?> future) {
                     return AsyncRuntime.await(future);
                 }
+                if (value instanceof Awaitable<?> signal) {
+                    return AsyncRuntime.await(signal.getAwaited());
+                }
                 if (value instanceof CompletionStage<?> stage) {
                     return AsyncRuntime.await(stage);
                 }
@@ -6652,6 +6655,10 @@ public final class OresEvalRootNode extends RootNode {
                         (ActorRuntime.ActorRef<Object>) actorRef;
                 return switch (name) {
                     case "ready" -> actorRef.ready();
+                    case "get_ready_signal" -> (Invokable) args -> {
+                        requireZero(args, "ActorRef.get_ready_signal");
+                        return actorRef.getReadySignal();
+                    };
                     case "done" -> actorRef.done();
                     case "outputs" -> actorRef.outputs();
                     case "id" -> actorRef.id();
