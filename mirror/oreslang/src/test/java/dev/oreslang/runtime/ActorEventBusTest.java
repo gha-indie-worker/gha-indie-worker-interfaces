@@ -405,8 +405,10 @@ final class ActorEventBusTest {
             AtomicReference<List<Integer>> received = new AtomicReference<>();
             AtomicReference<ActorEventBus.Event<List<Integer>>> observedEvent = new AtomicReference<>();
 
+            // This host harness deliberately captures test latches; the
+            // production capture-free PRIVATE factory remains unchanged.
             ActorRuntime.ActorRef<ActorRuntime.ActorGroupJoinCapability> privateActor =
-                    runtime.spawnPrivate(factoryContext -> {
+                    runtime.spawnPrivateTrusted(factoryContext -> {
                         final AtomicReference<ActorEventBus.Subscription<List<Integer>>> events =
                                 new AtomicReference<>();
                         return (joinCapability, context) -> {
