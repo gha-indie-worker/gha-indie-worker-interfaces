@@ -2347,6 +2347,13 @@ public final class TypeChecker {
                             }
                             yield Primitive.BOOL;
                         }
+                        case "get_ready_signal" -> {
+                            if (!call.arguments().isEmpty()) {
+                                throw new IllegalArgumentException(
+                                        "ActorRef.get_ready_signal expects no arguments");
+                            }
+                            yield new Named("ReadySignal", List.of(Primitive.VOID));
+                        }
                         case "ready", "done", "outputs", "id", "kind" ->
                                 throw new IllegalArgumentException(
                                         "ActorRef." + member.member()
@@ -2842,7 +2849,7 @@ public final class TypeChecker {
                             List.of(Unknown.INSTANCE));
                     case "id" -> new Named("ActorId", List.of());
                     case "kind" -> new Named("ActorKind", List.of());
-                    case "send", "stop", "cancel", "kill" ->
+                    case "send", "stop", "cancel", "kill", "get_ready_signal" ->
                             throw new IllegalArgumentException(
                                     "ActorRef." + member.member()
                                             + " is direct-call-only; invoke it with (...)");
@@ -3176,12 +3183,12 @@ public final class TypeChecker {
         if (expr instanceof Ast.AwaitExpr awaited) {
             Type awaitedType = typeOf(awaited.expression(), env, generics, self);
             if (awaitedType instanceof Named named
-                    && named.name().equals("Future")
+                    && (named.name().equals("Future") || named.name().equals("ReadySignal"))
                     && named.arguments().size() == 1) {
                 return named.arguments().getFirst();
             }
             throw new IllegalArgumentException(
-                    "await requires Future<T>; got " + awaitedType);
+                    "await requires Future<T> or ReadySignal<T>; got " + awaitedType);
         }
         if (expr instanceof Ast.ChannelOpExpr channelOp) {
             Type element = channelElementType(
