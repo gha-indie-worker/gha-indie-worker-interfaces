@@ -64,9 +64,11 @@ final class SourceActorSpawnExecutionTest {
                   privateWorker.send("stop");
                   sandboxed.send("stop");
 
-                  await shared.done;
-                  await privateWorker.done;
-                  await sandboxed.done;
+                  await shared.get_done_signal();
+                  await privateWorker.get_done_signal();
+                  await sandboxed.get_done_signal();
+                  // Terminal lifecycle signals are safe to await more than once.
+                  await shared.get_done_signal();
 
                   stdio.stdout.write("actors-done");
                   return;
