@@ -98,6 +98,8 @@ public final class OresScheduler implements AutoCloseable {
     private final TurnExecutor turnExecutor;
     private final ProcessTurnTrace turnTrace;
     private final CopyOnWriteArrayList<Runnable> closeHooks = new CopyOnWriteArrayList<>();
+    /** Atomically fences resource-hook registration against scheduler closure. */
+    private final Object closeRegistrationLock = new Object();
     private final Set<TaskRunner<?>> tasks = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -364,25 +366,37 @@ public final class OresScheduler implements AutoCloseable {
         Objects.requireNonNull(turn, "turn");
         Objects.requireNonNull(afterTurn, "afterTurn");
         ensureOpen();
-        executor.execute(() -> {
-            boolean priorCarrier = Boolean.TRUE.equals(SCHEDULER_CARRIER.get());
-            SCHEDULER_CARRIER.set(Boolean.TRUE);
-            try {
-                turnExecutor.execute(() -> runBound(turn));
-            } catch (RuntimeException | Error failure) {
-                // Context admission can fail before runTurn starts. Settle the
-                // owning task instead of leaving the host waiting forever.
-                admissionFailure.accept(failure);
-                if (failure instanceof VirtualMachineError fatal) throw fatal;
-                if (failure instanceof ThreadDeath fatal) throw fatal;
-                if (failure instanceof LinkageError fatal) throw fatal;
-            } finally {
-                if (priorCarrier) {
-                    SCHEDULER_CARRIER.set(Boolean.TRUE);
-                } else {
-                    SCHEDULER_CARRIER.remove();
+        executor.execute(new SerialProcessExecutor.RejectionAwareTurn() {
+            @Override public void run() {
+                boolean priorCarrier = Boolean.TRUE.equals(SCHEDULER_CARRIER.get());
+                SCHEDULER_CARRIER.set(Boolean.TRUE);
+                try {
+                    turnExecutor.execute(() -> runBound(turn));
+                } catch (RuntimeException | Error failure) {
+                    // Context admission can fail before runTurn starts. Settle
+                    // the owning task instead of leaving a Future unresolved.
+                    admissionFailure.accept(failure);
+                    if (failure instanceof VirtualMachineError fatal) throw fatal;
+                    if (failure instanceof ThreadDeath fatal) throw fatal;
+                    if (failure instanceof LinkageError fatal) throw fatal;
+                } finally {
+                    if (priorCarrier) {
+                        SCHEDULER_CARRIER.set(Boolean.TRUE);
+                    } else {
+                        SCHEDULER_CARRIER.remove();
+                    }
+                    afterTurn.run();
                 }
-                afterTurn.run();
+            }
+
+            @Override public void reject(Throwable failure) {
+                // No guest execution: settle the task and publish a terminal
+                // outcome for a turn that could not obtain another carrier.
+                try {
+                    admissionFailure.accept(failure);
+                } finally {
+                    afterTurn.run();
+                }
             }
         });
     }
@@ -397,12 +411,12 @@ public final class OresScheduler implements AutoCloseable {
     /** Lifecycle registration for resources owned by this logical process. */
     void onClose(Runnable callback) {
         Objects.requireNonNull(callback, "callback");
-        if (closed.get()) {
-            callback.run();
-            return;
+        boolean executeNow;
+        synchronized (closeRegistrationLock) {
+            executeNow = closed.get();
+            if (!executeNow) closeHooks.add(callback);
         }
-        closeHooks.add(callback);
-        if (closed.get() && closeHooks.remove(callback)) callback.run();
+        if (executeNow) callback.run();
     }
 
     @Override
@@ -412,32 +426,61 @@ public final class OresScheduler implements AutoCloseable {
                     "OresScheduler cannot be closed from one of its own task turns; "
                             + "close it from an outside/root scheduler task");
         }
-        if (!closed.compareAndSet(false, true)) return;
+        java.util.List<Runnable> hooksToClose;
+        synchronized (closeRegistrationLock) {
+            if (!closed.compareAndSet(false, true)) return;
+            hooksToClose = java.util.List.copyOf(closeHooks);
+            closeHooks.clear();
+        }
 
-        // Closing a process must first revoke its timers/async wakeups.
-        for (Runnable callback : closeHooks) callback.run();
-        closeHooks.clear();
+        // Close hooks are untrusted host/runtime code. An exception from one
+        // must never strand the other scopes, task Futures or carrier threads.
+        // Re-throw the first failure only AFTER all shutdown actions were tried.
+        Throwable shutdownFailure = null;
+        for (Runnable callback : hooksToClose) {
+            try {
+                callback.run();
+            } catch (Throwable failure) {
+                shutdownFailure = accumulateShutdownFailure(shutdownFailure, failure);
+            }
+        }
 
         for (TaskRunner<?> task : Set.copyOf(tasks)) {
-            task.cancelFromSchedulerClose();
+            try {
+                task.cancelFromSchedulerClose();
+            } catch (Throwable failure) {
+                shutdownFailure = accumulateShutdownFailure(shutdownFailure, failure);
+            }
         }
         tasks.clear();
 
         if (ownedExecutor != null) {
-            ownedExecutor.shutdownNow();
-            if (CURRENT.get() != this) {
-                try {
-                    if (!ownedExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                        throw new IllegalStateException(
-                                "OresScheduler " + name + " carriers did not terminate");
-                    }
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new java.util.concurrent.CancellationException(
-                            "interrupted while closing OresScheduler " + name);
+            try {
+                ownedExecutor.shutdownNow();
+                if (!ownedExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException(
+                            "OresScheduler " + name + " carriers did not terminate");
                 }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                shutdownFailure = accumulateShutdownFailure(shutdownFailure,
+                        new java.util.concurrent.CancellationException(
+                                "interrupted while closing OresScheduler " + name));
+            } catch (Throwable failure) {
+                shutdownFailure = accumulateShutdownFailure(shutdownFailure, failure);
             }
         }
+        if (shutdownFailure instanceof Error fatal) throw fatal;
+        if (shutdownFailure instanceof RuntimeException ordinary) throw ordinary;
+        if (shutdownFailure != null) {
+            throw new IllegalStateException("scheduler shutdown failed", shutdownFailure);
+        }
+    }
+
+    private static Throwable accumulateShutdownFailure(Throwable previous, Throwable next) {
+        if (previous == null) return next;
+        if (previous != next) previous.addSuppressed(next);
+        return previous;
     }
 
     private final class TaskRunner<T> implements BiConsumer<Object, Throwable> {
